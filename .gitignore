@@ -216,3 +216,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Extracted output (keep the dir via .gitkeep)
+output/*
+!output/.gitkeep
+
+# local extracted pages
+data/pages/*
+!data/pages/.gitkeep
+
+# vLLM OCR results
+vllm/results/*
+!vllm/results/.gitkeep
+
+# vLLM tracked instance state
+vllm/aws/instances/

@@ -1,2 +1,217 @@
 # ocr-benchmarking
-Testing baseline, local, and sota OCR methods on a difficult set of chemical/material science IP/Papers
+Testing baseline, local, and sota OCR methods on a difficult set of chemical/material science IP/Papers, specifically for battery systems
+
+Part 1: Setting up OCR motifs / benchmarks
+
+I will add data (a few PDFs of material science papers and patents)
+
+Models of interest:
+- https://huggingface.co/deepseek-ai/DeepSeek-OCR-2
+- https://huggingface.co/rednote-hilab/dots.mocr
+- https://huggingface.co/allenai/olmOCR-2-7B-1025
+
+I intend to test these models in the OCR of the tables, figures, and so forth of the data that I add to the data folder, however, before we implement that (which will primarily live on AWS as a deploy script, which will pull from an S3 bucket containing the data which has been processed) I will indeed need to test the the pre-processing of the raw data itself. I would like you to set up the repo in such a manner that I can test different tool sets like CV numpy, and so forth for the pre-processing of raw data in the form of PDFs, essentially using whatever small models and computer vision tools are available to locally test the efficacy of table, figure extraction, and recognition so that I'm a route appropriately and more generally organized the OCR information that eventually will be tried with these models of interest on AWS.
+
+
+## Data
+(umbrella catagories and specific sources searched with gpt)
+
+Layered oxide cathodes:
+Paper:
+- LixCoO 2 (0<x~l): A NEW CATHODE MATERIAL FOR BATTERIES OF HIGH ENERGY DENSITY 
+    - https://sci-hub.ru/10.1016/0025-5408(80)90012-4
+    - (https://www.sciencedirect.com/science/article/abs/pii/0025540880900124)
+Patent: 
+- Fast ion conductors
+    - https://patents.google.com/patent/US4357215A/en?oq=US4357215A
+
+
+LFP / olivine phosphate cathodes:
+Paper:
+- Phytic acid derived LiFePO4 beyond theoretical capacity as high-energy density cathode for lithium ion battery
+    - https://sci-hub.ru/10.1016/j.nanoen.2017.03.006
+    - (https://www.sciencedirect.com/science/article/abs/pii/S2211285517301374)
+
+Patent:
+- Cathode materials for secondary (rechargeable) lithium batteries
+    - https://patents.google.com/patent/US6514640B1/en?oq=US6514640B1
+
+
+SEI formation on anodes:
+Paper:
+- The Electrochemical Behavior of Alkali and Alkaline Earth Metals in Nonaqueous Battery Systems—The Solid Electrolyte Interphase Model
+    - https://sci-hub.ru/10.1149/1.2128859
+    - (https://iopscience.iop.org/article/10.1149/1.2128859/pdf)
+
+Patent:
+- An additive for lithium ion rechargeable battery cells
+    - https://patents.google.com/patent/EP2430686B1/en?oq=EP2430686B1
+
+
+Graphite/carbon anodes:
+Paper:
+- A reversible graphite-lithium negative electrode for electrochemical generators
+    - https://sci-hub.ru/10.1016/0378-7753(83)87040-2
+    - (https://www.sciencedirect.com/science/article/abs/pii/0378775383870402?via%3Dihub)
+
+Patent:
+- Process for producing carbon anode compositions for lithium ion batteries
+    - https://patents.google.com/patent/US7993780B2/en?oq=US7993780
+
+
+Electrochemical impedance spectroscopy — EIS
+Paper:
+- Application of electrochemical impedance spectroscopy to commercial Li-ion cells: A review
+    - https://www.sciencedirect.com/science/article/pii/S0378775320310466
+
+Patent: (this is more of a method so no specific patent on this)
+
+
+Silicon Anodes
+Paper:
+- Fundamental Investigation of Silicon Anode
+in Lithium-Ion Cells
+    - https://ntrs.nasa.gov/api/citations/20120016539/downloads/20120016539.pdf
+
+Patent:
+- Nanostructured silicon for battery anodes
+    - https://patents.google.com/patent/US8791449B2/en?oq=US8791449B2d
+
+
+Garnet LLZO solid electrolytes
+Paper:
+- Degradation Mechanism of All-Solid-State Li-Metal Batteries Studied by Electrochemical Impedance Spectroscopy
+    - https://pmc.ncbi.nlm.nih.gov/articles/PMC9478940/
+
+Patent:
+- Lithium stuffed garnet setter plates for solid electrolyte fabrication
+    - https://patents.google.com/patent/US9970711B2/en?oq=US9970711B2
+
+
+Sulfide/solid-state battery interfaces
+Patent:
+- Solid-state battery
+    - https://patents.google.com/patent/US20210167417A1/en?oq=US20210167417A1
+
+
+Electrolyte additives / high-voltage stability
+Paper:
+- Vinylene carbonate and vinylene trithiocarbonate as electrolyte additives for lithium ion battery
+    - https://sci-hub.ru/10.1016/j.jpowsour.2011.06.058
+    - https://www.sciencedirect.com/science/article/abs/pii/S0378775311012948
+
+Patent:
+- Lithium ion battery electrolyte additive
+    - https://patents.google.com/patent/US20220109187A1/en?oq=US20220109187A1
+
+
+Battery degradation / diagnostics
+Paper:
+- Electrochemical Impedance Spectroscopy as a Diagnostic and Prognostic Tool for EV Batteries: A Review
+    - https://www.jecst.org/upload/pdf/jecst-2024-01060.pdf
+
+
+
+
+## Specific selections
+Selecting a smaller set of specific pages to test with, hand picked for varience in:
+- Infomation density
+- Figure type
+- Resolution
+- Descriptive clarity
+
+
+Paper Selections:
+data/papers/1-s2.0-S0378775320310466-main.pdf - pg 9
+data/papers/20120016539.pdf - pg 13
+data/papers/am2c09841.pdf - pg 5
+data/papers/chang2011.pdf - pg 6 
+data/papers/LiFePO4_zhao2017.pdf - pg 417 (10)
+data/papers/LixCoO2_mizushima1980.pdf - pgs 3, 6
+data/papers/SEI_model_peled1979.pdf - pg 2
+data/papers/yazami1983.pdf - pg 6
+
+Patent Selections:
+data/patents/An_additive_for_lithium_ion_rechargeable_battery_cells_EP2430686B1.pdf - pgs 22, 38
+data/patents/Cathode_materials_for_secondary_(rechargeable)_lithium_batteriesUS6514640.pdf - pg 7 ---- XXXXXXX
+data/patents/fast_ion_conductors_US4357215.pdf - pgs 1, 3
+data/patents/US7993780.pdf - 3
+data/patents/US8791449.pdf - 6
+data/patents/US9970711.pdf - 22
+data/patents/US20210167417A1.pdf - 16 (textually dense)
+data/patents/US20220109187A1.pdf - 10, 11 (checmical)
+
+
+## Layout Preprocessing Stage
+- try a few methods for cleanly separating textual content from figures, tables, graphs etc.
+
+Methods:
+- OpenCV morphological
+- OpenCV projecction
+- DocLayout-YOLO
+
+## Notes on each:
+
+### Doclayout-Yolo
+- Best overall at apprpriate bounds/text
+- data/pages/1-s2.0-S0378775320310466-main/9/doclayout_yolo/figures/figure_0.png should instead be further chunked (possibly a post-parse check then further split via openCV?)
+- Text sometimes extracted twice over: data/pages/chang2011/6/doclayout_yolo/text/text_4.png / text_5.png
+- Tables / figures merged, creating duplicate sets, will need to estimate via pizel ranges what is unique data/pages/yazami1983/6/doclayout_yolo/figures
+
+### OpenCV Morphological
+- actually better at dense figures: data/pages/1-s2.0-S0378775320310466-main/9/doclayout_yolo/figures/figure_0.png 
+- mistakes sometext heavy figures for text: data/pages/1-s2.0-S0378775320310466-main/9/opencv_morphological/text/text_9.png
+- axes cut off data/pages/An_additive_for_lithium_ion_rechargeable_battery_cells_EP2430686B1/38/opencv_projection/figures/figure_1.png
+- Dense and old? ie data/pages/SEI_model_peled1979
+    - need a lot of disambiguation/context per figure, else are too abstract for OCR model (presumably)
+- Micharacterization of figures with nearby formula as formula data/pages/SEI_model_peled1979/2/doclayout_yolo/figures/isolate_formula_8.png
+
+### OpenCV projection
+- real bad, frequently mistakes figures for text
+- critical axes cut off data/pages/An_additive_for_lithium_ion_rechargeable_battery_cells_EP2430686B1/38/opencv_projection/figures/figure_1.png
+
+
+## Notes / Improvements to Evaluate:
+- Test efficacy of OCR for dense figures ie, data/pages/LiFePO4_zhao2017/10/doclayout_yolo/figures/figure_0.png
+    - may need adiditonal split
+    - may need a way to associate description with OCR for dense figure (context wise)
+- May want to trim noisy / partial artifacts ie: data/pages/LixCoO2_mizushima1980/6/doclayout_yolo/figures/table_0.png
+    - Check text metadat position, reconstruct missing/partial artifact and fill in as rectangular?
+- Interpretation of schematics via OCR model a domain to be explored, ie data/pages/US7993780/3/doclayout_yolo/figures/figure_0.png
+- Tables / figures merged, creating duplicate sets, will need to estimate via pizel ranges what is unique data/pages/yazami1983/6/doclayout_yolo/figures
+- No idea how to scientific high res images ie data/pages/US8791449/6/page_6.png
+    - contextual identification -> ...?  Might not get a lot of value if simply an image, but the concept ought to be stored from its description.
+
+
+# Figure Remediation Methods:
+
+## Core Features:
+We want to correct associate the figure/subfigure metadata (ie: a. through e.) with the respective graph.
+    > solution: something either heursitic based or model based...
+
+## Edge Cases:
+Figure has some text which is cut off - detected by 'ink' at the edge of the image
+    > solution: find whatever other bounds overlap within that vicinity and stitch then together, filling in whitespace where needed.
+
+
+# Pre Pipeline composition...
+host on aws olmo + rednote + deepseek OCR behand an api gate so that we can test directly the data we get out of each respectively.
+
+
+
+
+
+## OCR Stage:
+Baseline (ie tesseract, donut) vs OCR models
+- Just text
+- Just figures/diagrams
+- Mixed (full page images)
+
+
+
+
+
+
+
+Part 2: Benchmarking latency and throguhput on AWS (Applying specVLM to do speculative decoding over best model selection, as well as other speedup techniques)
+g6.xlarge/g6.2xlarge/g6.4xlarge (or g6e/g6f)
