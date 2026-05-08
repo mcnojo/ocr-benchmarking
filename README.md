@@ -1,17 +1,10 @@
-# ocr-benchmarking
+# ocr-benchmarking - BEWARE: Work in Progress
 Testing baseline, local, and sota OCR methods on a difficult set of chemical/material science IP/Papers, specifically for battery systems
 
-Part 1: Setting up OCR motifs / benchmarks
-
-I will add data (a few PDFs of material science papers and patents)
-
-Models of interest:
+## Models of interest:
 - https://huggingface.co/deepseek-ai/DeepSeek-OCR-2
 - https://huggingface.co/rednote-hilab/dots.mocr
 - https://huggingface.co/allenai/olmOCR-2-7B-1025
-
-I intend to test these models in the OCR of the tables, figures, and so forth of the data that I add to the data folder, however, before we implement that (which will primarily live on AWS as a deploy script, which will pull from an S3 bucket containing the data which has been processed) I will indeed need to test the the pre-processing of the raw data itself. I would like you to set up the repo in such a manner that I can test different tool sets like CV numpy, and so forth for the pre-processing of raw data in the form of PDFs, essentially using whatever small models and computer vision tools are available to locally test the efficacy of table, figure extraction, and recognition so that I'm a route appropriately and more generally organized the OCR information that eventually will be tried with these models of interest on AWS.
-
 
 ## Data
 (umbrella catagories and specific sources searched with gpt)
@@ -133,7 +126,7 @@ data/papers/yazami1983.pdf - pg 6
 
 Patent Selections:
 data/patents/An_additive_for_lithium_ion_rechargeable_battery_cells_EP2430686B1.pdf - pgs 22, 38
-data/patents/Cathode_materials_for_secondary_(rechargeable)_lithium_batteriesUS6514640.pdf - pg 7 ---- XXXXXXX
+data/patents/Cathode_materials_for_secondary_(rechargeable)_lithium_batteriesUS6514640.pdf - pg 7 ---- IMPORTANT
 data/patents/fast_ion_conductors_US4357215.pdf - pgs 1, 3
 data/patents/US7993780.pdf - 3
 data/patents/US8791449.pdf - 6
@@ -194,24 +187,10 @@ Figure has some text which is cut off - detected by 'ink' at the edge of the ima
     > solution: find whatever other bounds overlap within that vicinity and stitch then together, filling in whitespace where needed.
 
 
-# Pre Pipeline composition...
+### Pre Pipeline composition...
 host on aws olmo + rednote + deepseek OCR behand an api gate so that we can test directly the data we get out of each respectively.
 
 
-
-
-
-## OCR Stage:
-Baseline (ie tesseract, donut) vs OCR models
-- Just text
-- Just figures/diagrams
-- Mixed (full page images)
-
-
-
-
-
-
-
-Part 2: Benchmarking latency and throguhput on AWS (Applying specVLM to do speculative decoding over best model selection, as well as other speedup techniques)
+## Part 2: 
+Benchmarking latency and throguhput on AWS (try applying specVLM to do speculative decoding over best model selection, as well as other speedup techniques)
 g6.xlarge/g6.2xlarge/g6.4xlarge (or g6e/g6f)
