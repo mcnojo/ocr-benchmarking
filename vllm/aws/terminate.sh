@@ -15,7 +15,8 @@ terminate_instance() {
         return 1
     fi
 
-    local id=$(cat "$id_file")
+    local id
+    id=$(cat "$id_file")
     local region="$AWS_REGION"
     [[ -f "$INSTANCE_DIR/${key}.region" ]] && region=$(cat "$INSTANCE_DIR/${key}.region")
 
@@ -36,7 +37,7 @@ if [[ -z "$TARGET" ]]; then
     if [[ -d "$INSTANCE_DIR" ]]; then
         echo ""
         echo "Tracked:"
-        for f in "$INSTANCE_DIR"/*.id 2>/dev/null; do
+        for f in "$INSTANCE_DIR"/*.id; do
             [[ -f "$f" ]] || continue
             name=$(basename "$f" .id)
             id=$(cat "$f")
@@ -49,7 +50,7 @@ if [[ -z "$TARGET" ]]; then
 fi
 
 if [[ "$TARGET" == "all" ]]; then
-    for f in "$INSTANCE_DIR"/*.id 2>/dev/null; do
+    for f in "$INSTANCE_DIR"/*.id; do
         [[ -f "$f" ]] || continue
         terminate_instance "$(basename "$f" .id)"
     done

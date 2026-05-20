@@ -6,31 +6,29 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
 
-declare -A MODEL_IDS=(
-    [deepseek]="deepseek-ai/DeepSeek-OCR-2"
-    [dots]="rednote-hilab/dots.mocr"
-    [olmocr]="allenai/olmOCR-2-7B-1025-FP8"
-)
-declare -A MODEL_PORTS=(
-    [deepseek]=8001
-    [dots]=8002
-    [olmocr]=8003
-)
-declare -A MODEL_EXTRA=(
-    [deepseek]=""
-    [dots]="--chat-template-content-format string"
-    [olmocr]=""
-)
-
 MODEL_KEY="${1:-}"
-if [[ -z "$MODEL_KEY" ]] || [[ -z "${MODEL_IDS[$MODEL_KEY]+x}" ]]; then
-    echo "Usage: $0 <deepseek|dots|olmocr>"
-    exit 1
-fi
 
-MODEL_ID="${MODEL_IDS[$MODEL_KEY]}"
-PORT="${MODEL_PORTS[$MODEL_KEY]}"
-EXTRA="${MODEL_EXTRA[$MODEL_KEY]}"
+case "$MODEL_KEY" in
+    deepseek)
+        MODEL_ID="deepseek-ai/DeepSeek-OCR-2"
+        PORT=8001
+        EXTRA=""
+        ;;
+    dots)
+        MODEL_ID="rednote-hilab/dots.mocr"
+        PORT=8002
+        EXTRA="--chat-template-content-format string"
+        ;;
+    olmocr)
+        MODEL_ID="allenai/olmOCR-2-7B-1025-FP8"
+        PORT=8003
+        EXTRA=""
+        ;;
+    *)
+        echo "Usage: $0 <deepseek|dots|olmocr>"
+        exit 1
+        ;;
+esac
 
 echo "=== Launching $MODEL_KEY ==="
 echo "Model:    $MODEL_ID"
