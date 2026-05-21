@@ -1,10 +1,31 @@
 # ocr-benchmarking - BEWARE: Work in Progress
-Testing baseline, local, and sota OCR methods on a difficult set of chemical/material science IP/Papers, specifically for battery systems
+Testing baseline, local, and sota OCR methods on a difficult set of chemical/material science IP/Papers, specifically for sodium-ion battery systems, starting with electrolyte design. Why sodium ion electrolyte design?
+- https://en.highstar.com/blog/energy-density-sodium-vs-lithium-battery-comparison-analysis
+- simulating electrolyte molecules is feasible on minmal hardware, minutes not hours for full DFT
 
-## Models of interest:
+## Models of interest
+
+### OCR
+- https://huggingface.co/datalab-to/chandra-ocr-2
 - https://huggingface.co/deepseek-ai/DeepSeek-OCR-2
 - https://huggingface.co/rednote-hilab/dots.mocr
 - https://huggingface.co/allenai/olmOCR-2-7B-1025
+
+### Reasoners (may need to benchmark on relevant tasks, re retrosynthesis)
+- https://huggingface.co/osunlp/LlaSMol-Mistral-7B
+- https://huggingface.co/weidawang/Chem-R-8B
+
+### Plot/chart data extraction
+- https://github.com/automeris-io/WebPlotDigitizer
+- https://huggingface.co/google/deplot
+
+## Resources:
+- [ParseBench leaderboard](https://huggingface.co/datasets/llamaindex/ParseBench?eval_result=infly/Infinity-Parser2-Pro&leaderboard_task_id=chart)
+- [Materials Project APIs/tools](https://docs.materialsproject.org/)
+- [pymatgen](https://pymatgen.org/)
+- Framework which sits at top of the [chembench leaderboard](https://huggingface.co/spaces/jablonkagroup/ChemBench-Leaderboard), [Nexus Sci Agent](https://github.com/CASIA-LM/S1-NexusAgent)
+- [Hackathon submissions](https://llmhackathon.github.io/submissions/) for chem, goldmine of architecures to integrate
+
 
 ## Data
 (umbrella catagories and specific sources searched with gpt)
@@ -190,7 +211,40 @@ Figure has some text which is cut off - detected by 'ink' at the edge of the ima
 ### Pre Pipeline composition...
 host on aws olmo + rednote + deepseek OCR behand an api gate so that we can test directly the data we get out of each respectively.
 
+> ./launch.sh deepseek/olmo/etc
+> ssh -i /Users/noah/.ssh/deepseek-ocr-key.pem ubuntu@( IP ) 'tail -f ~/vllm_serve.log'
+> cd ..
+> python batch.py
+
+### Combinations:
+1) across each model for a subset of images
+(report and iterate)
+
+### Potential improvements:
+- preprocess large *sets* of tables into composed sets of figures
+- optimize 
+
+
+## Paper Processing Output Shape:
+Formalize a local file system for papers -> text/figures/hierarchy
+    - a dictionary/tree of metadata containing sectionwise contents and references to file paths and their OCR status.
+        - (includes position metadata to detail what was on the same page, which caption refers to what, etc during prompt construction)
+    - a few tools for file open/read
+    - a scratchpad to refer to with notes regarding the paper.
+
+
+
 
 ## Part 2: 
-Benchmarking latency and throguhput on AWS (try applying specVLM to do speculative decoding over best model selection, as well as other speedup techniques)
-g6.xlarge/g6.2xlarge/g6.4xlarge (or g6e/g6f)
+- Minimal harness and local interaction
+- Run on two laptops linked by ports..
+- Goal: (determine in precise language a testable [simulatable] and searchable molecule)
+- Iterative harness between search (arxiv, materials project)
+    - first pass comprehension
+    - OCR and result formalization
+    - storage
+    - TRACK LATENCY HERE AND FORMALLY NOTE ITERATIVE IMPROVEMENTS
+
+- Once a number of papers have results formalized and summarized, propose hypotheses to test/simulate in a sandbox
+    - first pass with a model which approximates reults
+    - second is the formal simulation
