@@ -24,8 +24,13 @@ case "$MODEL_KEY" in
         PORT=8003
         EXTRA=""
         ;;
+    chandra)
+        MODEL_ID="datalab-to/chandra-ocr-2"
+        PORT=8004
+        EXTRA=""
+        ;;
     *)
-        echo "Usage: $0 <deepseek|dots|olmocr>"
+        echo "Usage: $0 <deepseek|dots|olmocr|chandra>"
         exit 1
         ;;
 esac
@@ -55,16 +60,15 @@ if [[ -z "$SG_ID" || "$SG_ID" == "None" ]]; then
     aws ec2 authorize-security-group-ingress \
         --region "$AWS_REGION" --group-id "$SG_ID" \
         --protocol tcp --port 22 --cidr 0.0.0.0/0
-
-    for p in 8001 8002 8003; do
-        aws ec2 authorize-security-group-ingress \
-            --region "$AWS_REGION" --group-id "$SG_ID" \
-            --protocol tcp --port "$p" --cidr 0.0.0.0/0
-    done
     echo "Created: $SG_ID"
 else
     echo "Using existing: $SG_ID"
 fi
+
+# ensure the model's port is open (idempotent — silently succeeds if rule exists)
+aws ec2 authorize-security-group-ingress \
+    --region "$AWS_REGION" --group-id "$SG_ID" \
+    --protocol tcp --port "$PORT" --cidr 0.0.0.0/0 2>/dev/null || true
 
 # launch
 echo ""

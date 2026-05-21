@@ -33,7 +33,7 @@ terminate_instance() {
 TARGET="${1:-}"
 
 if [[ -z "$TARGET" ]]; then
-    echo "Usage: $0 <deepseek|dots|olmocr|all|INSTANCE_ID>"
+    echo "Usage: $0 <deepseek|chandra|dots|olmocr|all|INSTANCE_ID>"
     if [[ -d "$INSTANCE_DIR" ]]; then
         echo ""
         echo "Tracked:"

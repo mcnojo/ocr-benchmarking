@@ -20,7 +20,7 @@ nohup "$HOME/.local/bin/vllm" serve "$MODEL_ID" \
     --tensor-parallel-size 1 \
     --gpu-memory-utilization 0.9 \
     --trust-remote-code \
-    --max-model-len 4096 \
+    --max-model-len 8192 \
     $EXTRA_ARGS \
     > /home/ubuntu/vllm_serve.log 2>&1 &
 
