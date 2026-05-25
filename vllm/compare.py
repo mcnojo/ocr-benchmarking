@@ -135,6 +135,17 @@ def render_content(content: str) -> str:
     if "data-bbox=" in content or "data-label=" in content:
         return content
 
+    # check for DePlot-style linearized tables (pipe-separated with <0x0A> newlines)
+    if " | " in content and ("<0x0A>" in content or "\n" in content):
+        rows = content.replace("<0x0A>", "\n").strip().split("\n")
+        if len(rows) >= 2:
+            table_rows = []
+            for i, row in enumerate(rows):
+                cells = [c.strip() for c in row.split(" | ")]
+                tag = "th" if i == 0 else "td"
+                table_rows.append("<tr>" + "".join(f"<{tag}>{html.escape(c)}</{tag}>" for c in cells) + "</tr>")
+            return f'<table>{"".join(table_rows)}</table>'
+
     # fallback: plain text / markdown — show as preformatted
     return f"<pre>{html.escape(content)}</pre>"
 

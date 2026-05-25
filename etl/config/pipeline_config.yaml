@@ -1,0 +1,60 @@
+# ─── LLM for tree building (text-based, not vision) ───────────────────────────
+# Supports three modes:
+#   1. Cloud API (OpenAI, Anthropic, etc.): set model to litellm string, set api_key_env
+#   Ollama: model: "qwen3.5:9b", base_url: "http://localhost:11434/v1"
+#   MLX:    model: "mlx-community/Qwen3.5-9B-MLX-4bit", base_url: "http://localhost:8080/v1"
+#   Cloud:  model: "gpt-4o", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY"
+tree_llm:
+  model: "gemma3:4b-16k"                      # strong model: structure generation, TOC transformation
+  model_fast: "gemma3:4b-16k"                 # fast model: TOC detection, verification, summaries
+  base_url: "http://localhost:11434/v1"       # Ollama's OpenAI-compatible endpoint
+  api_key_env: null                           # no key needed for local
+  max_tokens: 16384
+
+# ─── Vision server (VLM + OCR models, any OpenAI-compatible endpoint) ─────────
+# Works with vLLM, Ollama, MLX, or any server exposing /v1/chat/completions
+vision_server:
+  base_url: "http://localhost:8000/v1"
+  api_key: "EMPTY"                    # vLLM default; set "local" for MLX/Ollama
+  vlm_model: "Qwen/Qwen2.5-VL-7B-Instruct"
+  ocr_model: "deepseek-ai/deepseek-ocr-1.5"
+
+# ─── Tree building ─────────────────────────────────────────────────────────────
+tree:
+  toc_check_pages: 25
+  max_pages_per_node: 10
+  max_tokens_per_node: 18000
+  add_node_summary: true
+  add_node_id: true
+  add_doc_description: false
+
+# ─── Layout detection (doclayout-yolo) ────────────────────────────────────────
+layout:
+  model_path: null                    # null = use doclayout-yolo default
+  confidence_threshold: 0.25
+  iou_threshold: 0.45
+  target_classes:
+    - "figure"
+    - "table"
+    - "figure_caption"
+    - "table_caption"
+    - "isolate_formula"
+
+# ─── Page rendering ────────────────────────────────────────────────────────────
+rendering:
+  dpi: 200
+  ocr_dpi: 300
+  page_format: "PNG"
+
+# ─── Enrichment ───────────────────────────────────────────────────────────────
+enrichment:
+  run_vlm_description: true
+  run_ocr: true
+  run_chem_entity_extraction: true
+  max_concurrent_enrichments: 4
+
+# ─── Output ────────────────────────────────────────────────────────────────────
+output:
+  kb_root: "./kb"
+  save_page_images: true
+  pretty_print_json: true

@@ -3,6 +3,14 @@ Testing baseline, local, and sota OCR methods on a difficult set of chemical/mat
 - https://en.highstar.com/blog/energy-density-sodium-vs-lithium-battery-comparison-analysis
 - simulating electrolyte molecules is feasible on minmal hardware, minutes not hours for full DFT
 
+Potential problem sets:
+1 - Hard Carbon SEI engienering
+**2 - Ether Oxidative Stability Extension** <- first anyhow
+3 - Salt Anion Design
+4 - Low Temp Electrolyte Design
+5 - First Cycle Efficiency / ICE
+
+
 ## Models of interest
 
 ### OCR
@@ -220,6 +228,19 @@ host on aws olmo + rednote + deepseek OCR behand an api gate so that we can test
 1) across each model for a subset of images
 (report and iterate)
 
+Looks like chandra is the way to go, i mean ParseBench speaks volumes with respect to charts/tables, but it's still not perfect with respect to extracting *all* data form the tables.
+
+We need to test these combos:
+
+0. Pipeline to correctly segment dense images and contents in papers.
+    > this is to be done first
+
+1. Just Chandra
+2. Just VL
+3. Chandra + VL
+
+
+
 ### Potential improvements:
 - preprocess large *sets* of tables into composed sets of figures
 - optimize 
@@ -232,6 +253,17 @@ Formalize a local file system for papers -> text/figures/hierarchy
     - a few tools for file open/read
     - a scratchpad to refer to with notes regarding the paper.
 
+
+4/25/26
+trying to do a kind of local scientific paper page index to generate a doc/file reference epresentation of each paper
+
+lotta context manipulation with ollama, should probably standardize to vllm once I have a sense of how the context and max token work
+
+notably, attention is quadratic in sequence length... gotta batch/overlap carefully
+
+echo 'FROM gemma3:4b                                                 
+  PARAMETER num_ctx 8192' > /tmp/Modelfile.gemma4b
+ollama create gemma3:4b-8k -f /tmp/Modelfile.gemma4b      
 
 
 

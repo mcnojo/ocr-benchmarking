@@ -231,3 +231,6 @@ vllm/results/*
 
 # vLLM tracked instance state
 vllm/aws/instances/
+
+etl/kb/*
+etl/logs/*

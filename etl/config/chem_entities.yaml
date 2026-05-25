@@ -1,0 +1,62 @@
+# Domain-specific seed entities for sodium-ion electrolyte research.
+# Formulas matched case-sensitively; names matched case-insensitively.
+entities:
+  # NASICON-type solid electrolytes
+  - "NASICON"
+  - "Na3Zr2Si2PO12"
+  - "Na1+xZr2SixP3-xO12"
+  - "Na3.4Sc0.4Zr1.6Si2PO12"
+  - "NZSP"
+
+  # Sodium beta-alumina
+  - "β-Al2O3"
+  - "β\"-Al2O3"
+  - "sodium beta-alumina"
+  - "Na-β-alumina"
+
+  # Sulfide solid electrolytes
+  - "Na3PS4"
+  - "Na3SbS4"
+  - "Na3BS3"
+  - "Na2.9PS3.95Se0.05"
+  - "Na3PSe4"
+
+  # Common sodium salts
+  - "NaPF6"
+  - "NaClO4"
+  - "NaFSI"
+  - "NaTFSI"
+  - "NaBF4"
+  - "NaDFOB"
+  - "NaOTf"
+
+  # Solvents
+  - "EC"
+  - "PC"
+  - "DME"
+  - "TEGDME"
+  - "diglyme"
+  - "FEC"
+
+  # Electrochemical terminology
+  - "ionic conductivity"
+  - "transference number"
+  - "electrochemical stability window"
+  - "ESW"
+  - "SEI"
+  - "CEI"
+  - "Nyquist"
+  - "EIS"
+  - "CV"
+  - "LSV"
+  - "GITT"
+  - "rate capability"
+  - "Coulombic efficiency"
+
+  # Common material abbreviations
+  - "NaCoO2"
+  - "NaMnO2"
+  - "NaFeO2"
+  - "Na2/3MnO2"
+  - "HC"
+  - "hard carbon"
