@@ -235,3 +235,4 @@ vllm/aws/instances/
 etl/kb/*
 etl/logs/*
 docs/
+.DS_Store
