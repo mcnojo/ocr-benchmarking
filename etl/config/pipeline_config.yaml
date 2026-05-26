@@ -1,15 +1,44 @@
 # ─── LLM for tree building (text-based, not vision) ───────────────────────────
-# Supports three modes:
-#   1. Cloud API (OpenAI, Anthropic, etc.): set model to litellm string, set api_key_env
-#   Ollama: model: "qwen3.5:9b", base_url: "http://localhost:11434/v1"
-#   MLX:    model: "mlx-community/Qwen3.5-9B-MLX-4bit", base_url: "http://localhost:8080/v1"
-#   Cloud:  model: "gpt-4o", base_url: "https://api.openai.com/v1", api_key_env: "OPENAI_API_KEY"
+# Provider is auto-detected from base_url (:11434 → ollama; else → openai),
+# or you can set it explicitly. Use prompt_style to pick the prompt variant:
+#   - "local":    elaborated for small open models (default; keep with Ollama/MLX)
+#   - "upstream": verbatim from VectifyAI/PageIndex (use with strong cloud models)
+#
+# Examples:
+#   Ollama (local):
+#     provider: ollama        # optional; auto-detected
+#     model: "gemma4:e4b-mlx"
+#     base_url: "http://localhost:11434/v1"
+#     prompt_style: local
+#     num_ctx: 32768          # Ollama context window
+#
+#   OpenAI (cloud):
+#     provider: openai
+#     model: "gpt-4o"
+#     model_fast: "gpt-4o-mini"
+#     base_url: "https://api.openai.com/v1"
+#     api_key_env: "OPENAI_API_KEY"
+#     prompt_style: upstream
+#     max_response_tokens: 8192
+#
+#   Anthropic (native SDK):
+#     provider: anthropic
+#     model: "claude-sonnet-4-5"
+#     model_fast: "claude-haiku-4-5"
+#     api_key_env: "ANTHROPIC_API_KEY"
+#     prompt_style: upstream
+#     max_response_tokens: 8192
+#     # base_url is ignored; Anthropic SDK uses its own endpoint.
+
 tree_llm:
-  model: "gemma3:4b-16k"                      # strong model: structure generation, TOC transformation
-  model_fast: "gemma3:4b-16k"                 # fast model: TOC detection, verification, summaries
+  provider: ollama                            # ollama | openai | anthropic (optional; auto-detected from base_url)
+  model: "gemma4:e4b-mlx"                     # strong model: structure generation, TOC transformation
+  model_fast: "gemma4:e4b-mlx"                # fast model: TOC detection, verification, summaries
   base_url: "http://localhost:11434/v1"       # Ollama's OpenAI-compatible endpoint
   api_key_env: null                           # no key needed for local
-  max_tokens: 16384
+  prompt_style: local                         # local (elaborated) | upstream (verbatim PageIndex)
+  num_ctx: 32768                              # Ollama context window (input + output tokens). e4b supports 128K.
+  max_response_tokens: 8192                   # cloud response cap (OpenAI/Anthropic max_tokens); ignored by Ollama
 
 # ─── Vision server (VLM + OCR models, any OpenAI-compatible endpoint) ─────────
 # Works with vLLM, Ollama, MLX, or any server exposing /v1/chat/completions
@@ -27,6 +56,8 @@ tree:
   add_node_summary: true
   add_node_id: true
   add_doc_description: false
+  summary_overlap_pages: 1            # adjacent pages included as context (boundary disambiguation; not summarized)
+  verify_summaries: true              # fast-model fidelity check + 1 retry on missed topics
 
 # ─── Layout detection (doclayout-yolo) ────────────────────────────────────────
 layout:
@@ -52,6 +83,7 @@ enrichment:
   run_ocr: true
   run_chem_entity_extraction: true
   max_concurrent_enrichments: 4
+  figure_aware_resummarize: true      # post-enrichment Stage E: re-summarize nodes with figure data (no new OCR calls)
 
 # ─── Output ────────────────────────────────────────────────────────────────────
 output:

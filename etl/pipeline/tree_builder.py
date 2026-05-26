@@ -9,7 +9,19 @@ Builds a hierarchical document tree from a PDF by:
 5. Verifying and correcting page assignments via async LLM checks
 6. Post-processing into a nested tree with start/end page ranges
 
-LLM calls use the OpenAI client against any OpenAI-compatible endpoint (Ollama, vLLM, MLX, cloud).
+Supports three LLM providers:
+- ollama: local Ollama via OpenAI-compatible endpoint (default).
+          Uses native Ollama JSON mode (`format: "json"`) and num_ctx for context.
+- openai: any OpenAI-compatible endpoint (OpenAI, Together, OpenRouter, vLLM, MLX).
+          Uses `response_format: {"type": "json_object"}` for JSON mode.
+- anthropic: native Anthropic SDK. JSON enforced via prompt + validation retry
+             (Anthropic has no native JSON mode for chat completions).
+
+Provider is selected via tree_llm.provider in config. If omitted, auto-detected
+from base_url (Ollama if :11434, else openai).
+
+Prompt variants ("upstream" verbatim PageIndex vs "local" elaborated for small
+models) are selected via tree_llm.prompt_style.
 """
 
 from __future__ import annotations
@@ -34,48 +46,107 @@ import yaml
 from openai import AsyncOpenAI, OpenAI
 
 from .node_schema import DocumentTree, TreeNode
+from .prompts import get_prompt
 
-# ─── Module-level clients, set once by build_tree_async ───────────────────────
+# ─── Module-level state, set once by _init_clients ───────────────────────────
+_provider: str = "ollama"          # "ollama" | "openai" | "anthropic"
+_prompt_style: str = "local"       # "local" | "upstream"
+
+# OpenAI-compatible (ollama / openai providers)
 _sync_client: OpenAI | None = None
 _async_client: AsyncOpenAI | None = None
-_model_name: str = ""       # strong model for hard tasks
-_model_name_fast: str = ""  # fast model for easy tasks (TOC detection, verification, summaries)
-_max_tokens: int = 32768    # context window to request from the server
-_ollama_base: str = ""      # Ollama native API base (without /v1), empty if non-Ollama
-_active_model: str | None = None  # currently loaded model in VRAM
+
+# Anthropic native SDK
+_anthropic_sync_client = None
+_anthropic_async_client = None
+
+_model_name: str = ""              # strong model for hard tasks
+_model_name_fast: str = ""         # fast model (TOC detection, verification, summaries)
+_num_ctx: int = 32768              # Ollama context window (input + output tokens)
+_max_response_tokens: int = 8192   # cloud response cap (OpenAI max_tokens / Anthropic max_tokens)
+_ollama_base: str = ""             # Ollama native API base (without /v1), empty if non-Ollama
+_active_model: str | None = None   # currently loaded model in VRAM (Ollama only)
 
 log = logging.getLogger("tree_builder")
 
 
 def _init_clients(config: dict):
-    """Initialize OpenAI clients from tree_llm config. Called once per run."""
-    global _sync_client, _async_client, _model_name, _model_name_fast
-    global _max_tokens, _ollama_base, _active_model
+    """Initialize provider clients from tree_llm config. Called once per run."""
+    global _provider, _prompt_style
+    global _sync_client, _async_client, _anthropic_sync_client, _anthropic_async_client
+    global _model_name, _model_name_fast
+    global _num_ctx, _max_response_tokens, _ollama_base, _active_model
 
     cfg = config["tree_llm"]
     _model_name = cfg["model"]
     _model_name_fast = cfg.get("model_fast") or _model_name
-    _max_tokens = cfg.get("max_tokens", 32768)
+    _prompt_style = (cfg.get("prompt_style") or "local").lower()
+    if _prompt_style not in ("local", "upstream"):
+        raise ValueError(
+            f"tree_llm.prompt_style must be 'local' or 'upstream', got {_prompt_style!r}"
+        )
+
+    # Resolve provider: explicit > auto-detect from base_url
+    explicit_provider = (cfg.get("provider") or "").lower() or None
     base_url = cfg.get("base_url") or "http://localhost:11434/v1"
-    api_key = "local"
+
+    if explicit_provider:
+        _provider = explicit_provider
+    elif ":11434" in base_url and "/v1" in base_url:
+        _provider = "ollama"
+    else:
+        _provider = "openai"
+
+    if _provider not in ("ollama", "openai", "anthropic"):
+        raise ValueError(
+            f"tree_llm.provider must be 'ollama' | 'openai' | 'anthropic', got {_provider!r}"
+        )
+
+    # Context/response token budgets. `num_ctx` is Ollama-only; cloud providers
+    # use `max_response_tokens` as the response cap. `max_tokens` is accepted
+    # as a back-compat alias for num_ctx (the old single knob).
+    _num_ctx = cfg.get("num_ctx") or cfg.get("max_tokens") or 32768
+    _max_response_tokens = cfg.get("max_response_tokens", 8192)
 
     api_key_env = cfg.get("api_key_env")
-    if api_key_env:
-        api_key = os.environ.get(api_key_env, "local")
+    api_key = os.environ.get(api_key_env) if api_key_env else None
 
-    _sync_client = OpenAI(base_url=base_url, api_key=api_key)
-    _async_client = AsyncOpenAI(base_url=base_url, api_key=api_key)
     _active_model = None
+    _ollama_base = ""
 
-    # Detect Ollama by its default port — enables model lifecycle management.
-    # Non-Ollama backends (vLLM, MLX, cloud) ignore unload calls gracefully.
-    if ":11434" in base_url and "/v1" in base_url:
-        _ollama_base = base_url.rsplit("/v1", 1)[0]
+    if _provider == "anthropic":
+        try:
+            from anthropic import Anthropic, AsyncAnthropic
+        except ImportError as e:
+            raise ImportError(
+                "anthropic provider requires the `anthropic` package. "
+                "Add it to requirements.txt and pip install."
+            ) from e
+        if not api_key:
+            raise ValueError(
+                f"anthropic provider requires api_key_env to point to an env var "
+                f"holding the API key (got api_key_env={api_key_env!r})"
+            )
+        _anthropic_sync_client = Anthropic(api_key=api_key)
+        _anthropic_async_client = AsyncAnthropic(api_key=api_key)
+        # Anthropic doesn't use base_url; ignore it.
     else:
-        _ollama_base = ""
+        # ollama or openai-compatible
+        _sync_client = OpenAI(base_url=base_url, api_key=api_key or "local")
+        _async_client = AsyncOpenAI(base_url=base_url, api_key=api_key or "local")
+        if _provider == "ollama":
+            # Strip /v1 suffix to get native Ollama API base for lifecycle ops
+            if "/v1" in base_url:
+                _ollama_base = base_url.rsplit("/v1", 1)[0]
+            else:
+                _ollama_base = base_url.rstrip("/")
 
-    log.info("Tree LLM: model=%s, model_fast=%s, base_url=%s, max_tokens=%d",
-             _model_name, _model_name_fast, base_url, _max_tokens)
+    log.info(
+        "Tree LLM: provider=%s, model=%s, model_fast=%s, prompt_style=%s, "
+        "num_ctx=%d, max_response_tokens=%d",
+        _provider, _model_name, _model_name_fast, _prompt_style,
+        _num_ctx, _max_response_tokens,
+    )
 
 
 def _ensure_model_exclusive(model_name: str):
@@ -116,11 +187,114 @@ def count_tokens(text: str, model: str | None = None) -> int:
     return len(_enc.encode(text))
 
 
+def _looks_like_valid_json(content: str) -> bool:
+    if not content or not content.strip():
+        return False
+    stripped = _strip_thinking(content).strip()
+    if stripped.startswith("```"):
+        stripped = _get_json_content(stripped)
+    try:
+        json.loads(stripped)
+        return True
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+
+# ─── Provider-specific call shims ────────────────────────────────────────────
+
+def _openai_messages_to_anthropic(messages: list) -> tuple[str | None, list]:
+    """Split OpenAI-style messages into (system, messages) for Anthropic.
+
+    Anthropic takes `system` as a top-level kwarg, not a message role.
+    """
+    system_parts = []
+    anth_messages = []
+    for m in messages:
+        role = m["role"]
+        if role == "system":
+            system_parts.append(m["content"])
+        else:
+            anth_messages.append({"role": role, "content": m["content"]})
+    system = "\n\n".join(system_parts) if system_parts else None
+    return system, anth_messages
+
+
+def _anthropic_extract(response) -> tuple[str, str]:
+    """Pull text content + normalized finish reason from an Anthropic response."""
+    content = ""
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            content += block.text
+        elif hasattr(block, "text"):
+            content += block.text
+    finish = "length" if response.stop_reason == "max_tokens" else "stop"
+    return content, finish
+
+
+def _openai_chat_kwargs(model: str, messages: list, temperature: float, json_mode: bool) -> dict:
+    kwargs: dict = {"model": model, "messages": messages, "temperature": temperature}
+    if _provider == "ollama":
+        # Ollama: pass num_ctx + grammar-constrained JSON via extra_body
+        extra_body: dict = {"num_ctx": _num_ctx}
+        if json_mode:
+            extra_body["format"] = "json"
+        kwargs["extra_body"] = extra_body
+    else:
+        # Cloud OpenAI-compatible: response cap + standard JSON mode
+        kwargs["max_tokens"] = _max_response_tokens
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+    return kwargs
+
+
+def _call_sync(model: str, messages: list, temperature: float, json_mode: bool) -> tuple[str, str]:
+    if _provider == "anthropic":
+        system, anth_messages = _openai_messages_to_anthropic(messages)
+        kwargs = {
+            "model": model,
+            "max_tokens": _max_response_tokens,
+            "temperature": temperature,
+            "messages": anth_messages,
+        }
+        if system:
+            kwargs["system"] = system
+        response = _anthropic_sync_client.messages.create(**kwargs)
+        return _anthropic_extract(response)
+
+    kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
+    response = _sync_client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content or ""
+    finish = response.choices[0].finish_reason
+    return content, finish
+
+
+async def _call_async(model: str, messages: list, temperature: float, json_mode: bool) -> tuple[str, str]:
+    if _provider == "anthropic":
+        system, anth_messages = _openai_messages_to_anthropic(messages)
+        kwargs = {
+            "model": model,
+            "max_tokens": _max_response_tokens,
+            "temperature": temperature,
+            "messages": anth_messages,
+        }
+        if system:
+            kwargs["system"] = system
+        response = await _anthropic_async_client.messages.create(**kwargs)
+        return _anthropic_extract(response)
+
+    kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
+    response = await _async_client.chat.completions.create(**kwargs)
+    content = response.choices[0].message.content or ""
+    finish = response.choices[0].finish_reason
+    return content, finish
+
+
 def llm_completion(
     model: str,
     prompt: str,
     chat_history: list | None = None,
     return_finish_reason: bool = False,
+    json_mode: bool = False,
 ) -> str | tuple[str, str]:
     """model arg is kept for call-site compat but the actual model is resolved here."""
     use_model = model if model and model != _model_name else _model_name
@@ -133,17 +307,21 @@ def llm_completion(
 
     for i in range(max_retries):
         try:
-            response = _sync_client.chat.completions.create(
-                model=use_model, messages=messages, temperature=0,
-                extra_body={"num_ctx": _max_tokens},
-            )
-            content = response.choices[0].message.content
-            finish = response.choices[0].finish_reason
+            # Bump temperature on retry to escape deterministic bad outputs
+            temperature = 0.0 if i == 0 else min(0.6, 0.2 * i)
+            content, finish = _call_sync(use_model, messages, temperature, json_mode)
 
             log.debug(
                 "llm_completion [%s]: response length=%d chars, finish_reason=%s, first 200: %.200s",
-                use_model, len(content) if content else 0, finish, content or "(empty)",
+                use_model, len(content), finish, content or "(empty)",
             )
+
+            if json_mode and finish != "length" and not _looks_like_valid_json(content):
+                log.warning(
+                    "llm_completion: json_mode response did not parse (attempt %d/%d); retrying",
+                    i + 1, max_retries,
+                )
+                continue
 
             if return_finish_reason:
                 reason = ("max_output_reached" if finish == "length" else "finished")
@@ -158,8 +336,12 @@ def llm_completion(
                     return "", "error"
                 return ""
 
+    if return_finish_reason:
+        return "", "error"
+    return ""
 
-async def llm_acompletion(model: str, prompt: str) -> str:
+
+async def llm_acompletion(model: str, prompt: str, json_mode: bool = False) -> str:
     use_model = model if model and model != _model_name else _model_name
     _ensure_model_exclusive(use_model)
     max_retries = 5
@@ -169,16 +351,20 @@ async def llm_acompletion(model: str, prompt: str) -> str:
 
     for i in range(max_retries):
         try:
-            response = await _async_client.chat.completions.create(
-                model=use_model, messages=messages, temperature=0,
-                extra_body={"num_ctx": _max_tokens},
-            )
-            content = response.choices[0].message.content
+            temperature = 0.0 if i == 0 else min(0.6, 0.2 * i)
+            content, finish = await _call_async(use_model, messages, temperature, json_mode)
 
             log.debug(
-                "llm_acompletion [%s]: response length=%d chars, first 200: %.200s",
-                use_model, len(content) if content else 0, content or "(empty)",
+                "llm_acompletion [%s]: response length=%d chars, finish_reason=%s, first 200: %.200s",
+                use_model, len(content), finish, content or "(empty)",
             )
+
+            if json_mode and finish != "length" and not _looks_like_valid_json(content):
+                log.warning(
+                    "llm_acompletion: json_mode response did not parse (attempt %d/%d); retrying",
+                    i + 1, max_retries,
+                )
+                continue
 
             return content
         except Exception as e:
@@ -187,6 +373,8 @@ async def llm_acompletion(model: str, prompt: str) -> str:
                 await asyncio.sleep(2)
             else:
                 return ""
+
+    return ""
 
 
 # ─── JSON extraction ──────────────────────────────────────────────────────────
@@ -451,16 +639,38 @@ def get_text_of_pdf_pages(pdf_pages, start_page, end_page):
     return "".join(pdf_pages[i][0] for i in range(start_page - 1, end_page))
 
 
-def add_node_text(node, pdf_pages):
+def add_node_text(node, pdf_pages, overlap_pages: int = 0):
+    """Attach the page-range text to each node, optionally with overlap context.
+
+    When overlap_pages > 0, the node's text is wrapped:
+        <<<context-before>>>{prev N pages}
+        <<<section-content>>>{the section}
+        <<<context-after>>>{next N pages}
+    Summarizers are instructed to summarize only the section-content block.
+    """
     if isinstance(node, dict):
-        node["text"] = get_text_of_pdf_pages(
-            pdf_pages, node["start_index"], node["end_index"]
-        )
+        s, e = node["start_index"], node["end_index"]
+        total = len(pdf_pages)
+        if overlap_pages > 0:
+            pre_start = max(1, s - overlap_pages)
+            post_end = min(total, e + overlap_pages)
+            pre = (get_text_of_pdf_pages(pdf_pages, pre_start, s - 1)
+                   if s > 1 and pre_start < s else "")
+            core = get_text_of_pdf_pages(pdf_pages, s, e)
+            post = (get_text_of_pdf_pages(pdf_pages, e + 1, post_end)
+                    if e < total and post_end > e else "")
+            node["text"] = (
+                f"<<<context-before>>>\n{pre}\n"
+                f"<<<section-content>>>\n{core}\n"
+                f"<<<context-after>>>\n{post}"
+            )
+        else:
+            node["text"] = get_text_of_pdf_pages(pdf_pages, s, e)
         if "nodes" in node:
-            add_node_text(node["nodes"], pdf_pages)
+            add_node_text(node["nodes"], pdf_pages, overlap_pages)
     elif isinstance(node, list):
         for item in node:
-            add_node_text(item, pdf_pages)
+            add_node_text(item, pdf_pages, overlap_pages)
 
 
 def remove_structure_text(data):
@@ -538,33 +748,8 @@ class JsonLogger:
 
 def toc_detector_single_page(content, model=None):
     model = _model_name_fast  # simple yes/no — always use fast model
-    prompt = f"""Does this page contain a TABLE OF CONTENTS — a structured listing of
-section/chapter titles that serves as a navigation guide for the document?
-
-A real table of contents:
-- Lists multiple section or chapter titles in hierarchical or sequential order
-- May include page numbers, but not always
-- Is explicitly labeled "Contents", "Table of Contents", or similar
-- Exists as a dedicated listing, not inline within running text
-
-These are NOT tables of contents — answer "no" for all of these:
-- Abstracts or summaries
-- Lists of figures, tables, abbreviations, or notation
-- Numbered section headings within the body text of a paper
-- Reference lists or bibliographies
-- Keyword lists
-- Author affiliations or acknowledgments
-- Journal article headers that list sections inline (e.g. "Introduction ... Methods ... Results")
-
-Most scientific journal articles (typically 4-30 pages) do NOT have a table of contents.
-Only answer "yes" if you see a clearly dedicated, structured listing of the document's sections.
-
-Text: {content}
-
-Reply with only this JSON, nothing else:
-{{"toc_detected": "yes or no"}}"""
-
-    response = llm_completion(model=model, prompt=prompt)
+    prompt = get_prompt("toc_detector_single_page", _prompt_style, content=content)
+    response = llm_completion(model=model, prompt=prompt, json_mode=True)
     return extract_json(response).get("toc_detected", "no")
 
 
@@ -589,14 +774,8 @@ def find_toc_pages(start_page_index, page_list, opt, logger=None):
 
 def detect_page_index(toc_content, model=None):
     model = _model_name_fast  # simple yes/no — always use fast model
-    prompt = f"""Does this table of contents contain page numbers or page indices?
-
-Text: {toc_content}
-
-Reply with only this JSON, nothing else:
-{{"page_index_given_in_toc": "yes or no"}}"""
-
-    response = llm_completion(model=model, prompt=prompt)
+    prompt = get_prompt("detect_page_index", _prompt_style, toc_content=toc_content)
+    response = llm_completion(model=model, prompt=prompt, json_mode=True)
     return extract_json(response).get("page_index_given_in_toc", "no")
 
 
@@ -616,29 +795,16 @@ def toc_extractor(page_list, toc_page_list, model):
 
 def check_if_toc_transformation_is_complete(content, toc, model=None):
     model = _model_name_fast  # simple yes/no — always use fast model
-    prompt = f"""Does the cleaned table of contents contain all sections from the raw table of contents?
-
-Raw Table of contents:
-{content}
-
-Cleaned Table of contents:
-{toc}
-
-Reply with only this JSON, nothing else:
-{{"completed": "yes or no"}}"""
-
-    response = llm_completion(model=model, prompt=prompt)
+    prompt = get_prompt(
+        "check_if_toc_transformation_is_complete", _prompt_style,
+        content=content, toc=toc,
+    )
+    response = llm_completion(model=model, prompt=prompt, json_mode=True)
     return extract_json(response).get("completed", "no")
 
 
 def extract_toc_content(content, model=None):
-    prompt = f"""
-    Your job is to extract the full table of contents from the given text, replace ... with :
-
-    Given text: {content}
-
-    Directly return the full table of contents content. Do not output anything else."""
-
+    prompt = get_prompt("extract_toc_content", _prompt_style, content=content)
     response, finish_reason = llm_completion(
         model=model, prompt=prompt, return_finish_reason=True
     )
@@ -650,7 +816,7 @@ def extract_toc_content(content, model=None):
         {"role": "user", "content": prompt},
         {"role": "assistant", "content": response},
     ]
-    cont_prompt = "please continue the generation of table of contents, directly output the remaining part of the structure"
+    cont_prompt = get_prompt("extract_toc_content_continue", _prompt_style)
 
     for _ in range(5):
         new_response, finish_reason = llm_completion(
@@ -690,28 +856,9 @@ def _extract_toc_list(parsed: dict | list) -> list | None:
 
 
 def toc_transformer(toc_content, model=None):
-    init_prompt = """
-    You are given a table of contents, You job is to transform the whole table of content into a JSON format included table_of_contents.
-
-    structure is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
-
-    The response should be in the following JSON format:
-    {
-    table_of_contents: [
-        {
-            "structure": <structure index, "x.x.x" or None> (string),
-            "title": <title of the section>,
-            "page": <page number or None>,
-        },
-        ...
-        ],
-    }
-    You should transform the full table of contents in one go.
-    Directly return the final JSON structure, do not output anything else. """
-
-    prompt = init_prompt + "\n Given table of contents\n:" + toc_content
+    prompt = get_prompt("toc_transformer", _prompt_style, toc_content=toc_content)
     last_complete, finish_reason = llm_completion(
-        model=model, prompt=prompt, return_finish_reason=True
+        model=model, prompt=prompt, return_finish_reason=True, json_mode=True
     )
     if_complete = check_if_toc_transformation_is_complete(toc_content, last_complete, model)
     if if_complete == "yes" and finish_reason == "finished":
@@ -727,19 +874,13 @@ def toc_transformer(toc_content, model=None):
         if position != -1:
             last_complete = last_complete[: position + 2]
 
-        cont_prompt = f"""
-        Your task is to continue the table of contents json structure, directly output the remaining part of the json structure.
-
-        The raw table of contents json structure is:
-        {toc_content}
-
-        The incomplete transformed table of contents json structure is:
-        {last_complete}
-
-        Please continue the json structure, directly output the remaining part of the json structure."""
+        cont_prompt = get_prompt(
+            "toc_transformer_continue", _prompt_style,
+            toc_content=toc_content, last_complete=last_complete,
+        )
 
         new_complete, finish_reason = llm_completion(
-            model=model, prompt=cont_prompt, return_finish_reason=True
+            model=model, prompt=cont_prompt, return_finish_reason=True, json_mode=True
         )
         if new_complete.startswith("```json"):
             new_complete = _get_json_content(new_complete)
@@ -760,59 +901,19 @@ def toc_transformer(toc_content, model=None):
 
 
 def toc_index_extractor(toc, content, model=None):
-    prompt = """
-    You are given a table of contents in a json format and several pages of a document, your job is to add the physical_index to the table of contents in the json format.
-
-    The provided pages contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
-
-    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents.
-
-    The response should be in the following JSON format:
-    [
-        {
-            "structure": <structure index, "x.x.x" or None> (string),
-            "title": <title of the section>,
-            "physical_index": "<physical_index_X>" (keep the format)
-        },
-        ...
-    ]
-
-    Only add the physical_index to the sections that are in the provided pages.
-    If the section is not in the provided pages, do not add the physical_index to it.
-    Directly return the final JSON structure. Do not output anything else."""
-
-    prompt += "\nTable of contents:\n" + str(toc) + "\nDocument pages:\n" + content
-    response = llm_completion(model=model, prompt=prompt)
+    prompt = get_prompt("toc_index_extractor", _prompt_style, toc=toc, content=content)
+    response = llm_completion(model=model, prompt=prompt, json_mode=True)
     return extract_json(response)
 
 
 # ─── Page number assignment ───────────────────────────────────────────────────
 
 def add_page_number_to_toc(part, structure, model=None):
-    prompt = """
-    You are given an JSON structure of a document and a partial part of the document. Your task is to check if the title that is described in the structure is started in the partial given document.
-
-    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
-
-    If the full target section starts in the partial given document, insert the given JSON structure with the "start": "yes", and "start_index": "<physical_index_X>".
-
-    If the full target section does not start in the partial given document, insert "start": "no",  "start_index": None.
-
-    The response should be in the following format.
-        [
-            {
-                "structure": <structure index, "x.x.x" or None> (string),
-                "title": <title of the section>,
-                "start": "<yes or no>",
-                "physical_index": "<physical_index_X> (keep the format)" or None
-            },
-            ...
-        ]
-    The given structure contains the result of the previous part, you need to fill the result of the current part, do not change the previous result.
-    Directly return the final JSON structure. Do not output anything else."""
-
-    prompt += f"\n\nCurrent Partial Document:\n{part}\n\nGiven Structure\n{json.dumps(structure, indent=2)}\n"
-    response = llm_completion(model=model, prompt=prompt)
+    prompt = get_prompt(
+        "add_page_number_to_toc", _prompt_style,
+        part=part, structure=structure,
+    )
+    response = llm_completion(model=model, prompt=prompt, json_mode=True)
     result = extract_json(response)
 
     for item in result:
@@ -822,33 +923,16 @@ def add_page_number_to_toc(part, structure, model=None):
 
 # ─── No-TOC tree generation ──────────────────────────────────────────────────
 
-def generate_toc_init(part, model=None):
-    prompt = """
-    You are an expert in extracting hierarchical tree structure, your task is to generate the tree structure of the document.
-
-    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents. For example, the first section has structure index 1, the first subsection has structure index 1.1, the second subsection has structure index 1.2, etc.
-
-    For the title, you need to extract the original title from the text, only fix the space inconsistency.
-
-    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X.
-
-    For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
-
-    The response should be in the following format.
-        [
-            {{
-                "structure": <structure index, "x.x.x"> (string),
-                "title": <title of the section, keep the original title>,
-                "physical_index": "<physical_index_X> (keep the format)"
-            }},
-
-        ],
-
-    Directly return the final JSON structure. Do not output anything else."""
-
-    prompt += "\nGiven text\n:" + part
+def generate_toc_init(part, model=None, toc_hint=None):
+    if toc_hint:
+        prompt = get_prompt(
+            "generate_toc_init_with_hint", _prompt_style,
+            part=part, toc_hint=toc_hint,
+        )
+    else:
+        prompt = get_prompt("generate_toc_init", _prompt_style, part=part)
     response, finish_reason = llm_completion(
-        model=model, prompt=prompt, return_finish_reason=True
+        model=model, prompt=prompt, return_finish_reason=True, json_mode=True
     )
     if finish_reason == "finished":
         return extract_json(response)
@@ -856,34 +940,12 @@ def generate_toc_init(part, model=None):
 
 
 def generate_toc_continue(toc_content, part, model=None):
-    prompt = """
-    You are an expert in extracting hierarchical tree structure.
-    You are given a tree structure of the previous part and the text of the current part.
-    Your task is to continue the tree structure from the previous part to include the current part.
-
-    The structure variable is the numeric system which represents the index of the hierarchy section in the table of contents.
-
-    For the title, you need to extract the original title from the text, only fix the space inconsistency.
-
-    The provided text contains tags like <physical_index_X> and <physical_index_X> to indicate the start and end of page X.
-
-    For the physical_index, you need to extract the physical index of the start of the section from the text. Keep the <physical_index_X> format.
-
-    The response should be in the following format.
-        [
-            {
-                "structure": <structure index, "x.x.x"> (string),
-                "title": <title of the section, keep the original title>,
-                "physical_index": "<physical_index_X> (keep the format)"
-            },
-            ...
-        ]
-
-    Directly return the additional part of the final JSON structure. Do not output anything else."""
-
-    prompt += "\nGiven text\n:" + part + "\nPrevious tree structure\n:" + json.dumps(toc_content, indent=2)
+    prompt = get_prompt(
+        "generate_toc_continue", _prompt_style,
+        toc_content=toc_content, part=part,
+    )
     response, finish_reason = llm_completion(
-        model=model, prompt=prompt, return_finish_reason=True
+        model=model, prompt=prompt, return_finish_reason=True, json_mode=True
     )
     if finish_reason == "finished":
         return extract_json(response)
@@ -892,7 +954,12 @@ def generate_toc_continue(toc_content, part, model=None):
 
 # ─── TOC processing paths ────────────────────────────────────────────────────
 
-def process_no_toc(page_list, start_index=1, model=None, logger=None):
+def process_no_toc(page_list, start_index=1, model=None, logger=None, toc_hint=None):
+    """Extract section structure from page text via chunked LLM passes.
+
+    If `toc_hint` is provided (a TOC found on a page in the document),
+    it's passed to the first chunk as a non-authoritative guide.
+    """
     page_contents = []
     token_lengths = []
     for page_index in range(start_index, start_index + len(page_list)):
@@ -906,9 +973,10 @@ def process_no_toc(page_list, start_index=1, model=None, logger=None):
 
     group_texts = page_list_to_group_text(page_contents, token_lengths)
     if logger:
-        logger.info(f"process_no_toc: {len(group_texts)} group(s)")
+        logger.info(f"process_no_toc: {len(group_texts)} group(s)"
+                    + (f" with TOC hint ({len(toc_hint)} chars)" if toc_hint else ""))
 
-    toc = generate_toc_init(group_texts[0], model)
+    toc = generate_toc_init(group_texts[0], model, toc_hint=toc_hint)
     for group_text in group_texts[1:]:
         additional = generate_toc_continue(toc, group_text, model)
         toc.extend(additional)
@@ -1076,7 +1144,7 @@ def process_toc_with_page_numbers(
 def check_toc(page_list, opt):
     # Cap TOC search to the first third of the document — a TOC deeper than
     # that is effectively absent for structural purposes, and scanning further
-    # just increases false-positive risk on short scientific papers.
+    # just increases false-positive risk on scientific papers.
     opt = copy.copy(opt)
     opt.toc_check_page_num = min(opt.toc_check_page_num, max(3, len(page_list) // 3))
 
@@ -1129,14 +1197,11 @@ async def check_title_appearance(item, page_list, start_index=1, model=None):
     page_number = item["physical_index"]
     page_text = page_list[page_number - start_index][0]
 
-    prompt = f"""Does the section titled "{title}" appear or start in this page text? Use fuzzy matching, ignore spacing differences.
-
-Page text: {page_text}
-
-Reply with only this JSON, nothing else:
-{{"answer": "yes or no"}}"""
-
-    response = await llm_acompletion(model=model, prompt=prompt)
+    prompt = get_prompt(
+        "check_title_appearance", _prompt_style,
+        title=title, page_text=page_text,
+    )
+    response = await llm_acompletion(model=model, prompt=prompt, json_mode=True)
     parsed = extract_json(response)
     answer = parsed.get("answer", "no")
     return {"list_index": item.get("list_index"), "answer": answer,
@@ -1145,14 +1210,11 @@ Reply with only this JSON, nothing else:
 
 async def check_title_appearance_in_start(title, page_text, model=None):
     model = _model_name_fast  # simple yes/no — always use fast model
-    prompt = f"""Is the section titled "{title}" the very first content on this page? Answer "no" if other content appears before it.
-
-Page text: {page_text}
-
-Reply with only this JSON, nothing else:
-{{"start_begin": "yes or no"}}"""
-
-    response = await llm_acompletion(model=model, prompt=prompt)
+    prompt = get_prompt(
+        "check_title_appearance_in_start", _prompt_style,
+        title=title, page_text=page_text,
+    )
+    response = await llm_acompletion(model=model, prompt=prompt, json_mode=True)
     return extract_json(response).get("start_begin", "no")
 
 
@@ -1216,20 +1278,11 @@ async def verify_toc(page_list, list_result, start_index=1, N=None, model=None):
 
 
 async def single_toc_item_index_fixer(section_title, content, model=None):
-    prompt = """
-    You are given a section title and several pages of a document, your job is to find the physical index of the start page of the section in the partial document.
-
-    The provided pages contains tags like <physical_index_X> and <physical_index_X> to indicate the physical location of the page X.
-
-    Reply in a JSON format:
-    {
-        "thinking": <explain which page contains the start of this section>,
-        "physical_index": "<physical_index_X>" (keep the format)
-    }
-    Directly return the final JSON structure. Do not output anything else."""
-
-    prompt += "\nSection Title:\n" + str(section_title) + "\nDocument pages:\n" + content
-    response = await llm_acompletion(model=model, prompt=prompt)
+    prompt = get_prompt(
+        "single_toc_item_index_fixer", _prompt_style,
+        section_title=section_title, content=content,
+    )
+    response = await llm_acompletion(model=model, prompt=prompt, json_mode=True)
     parsed = extract_json(response)
     return convert_physical_index_to_int(parsed.get("physical_index", ""))
 
@@ -1343,8 +1396,11 @@ async def meta_processor(
             model=opt.model, logger=logger,
         )
     else:
+        # If a TOC was detected but we're in the process_no_toc branch still pass the
+        # TOC text as a hint so chunked extraction benefits from it
         toc = process_no_toc(
             page_list, start_index=start_index, model=opt.model, logger=logger,
+            toc_hint=toc_content,
         )
 
     toc = [item for item in toc if item.get("physical_index") is not None]
@@ -1376,12 +1432,27 @@ async def meta_processor(
             start_index=start_index, opt=opt, logger=logger,
         )
     elif mode == "process_toc_no_page_numbers":
+        # Preserve the TOC text as a hint when falling back to chunked extraction.
         return await meta_processor(
             page_list, mode="process_no_toc",
+            toc_content=toc_content,
             start_index=start_index, opt=opt, logger=logger,
         )
     else:
-        raise RuntimeError("Tree building failed: all processing modes exhausted")
+        # Fail gracefully 
+        log.warning(
+            "Tree building: all processing modes failed verification "
+            "(accuracy=%.2f). Returning best-effort TOC (%d items) — "
+            "structure may be incomplete.",
+            accuracy, len(toc),
+        )
+        if toc:
+            return toc
+        return [{
+            "structure": "1",
+            "title": "Document",
+            "physical_index": start_index,
+        }]
 
 
 async def process_large_node_recursively(node, page_list, opt=None, logger=None):
@@ -1418,12 +1489,7 @@ async def process_large_node_recursively(node, page_list, opt=None, logger=None)
 
 async def generate_node_summary(node, model=None):
     model = _model_name_fast  # straightforward summarization — always use fast model
-    prompt = f"""You are given a part of a document, your task is to generate a description of the partial document about what are main points covered in the partial document.
-
-    Partial Document Text: {node['text']}
-
-    Directly return the description, do not include any other text."""
-
+    prompt = get_prompt("generate_node_summary", _prompt_style, node_text=node["text"])
     return await llm_acompletion(model, prompt)
 
 
@@ -1437,14 +1503,71 @@ async def generate_summaries_for_structure(structure, model=None):
     return structure
 
 
+def _extract_section_content(text: str) -> str:
+    """Pull just the <<<section-content>>> block out of overlap-wrapped text.
+    Returns the text unchanged if no marker is present."""
+    start_marker = "<<<section-content>>>"
+    end_marker = "<<<context-after>>>"
+    si = text.find(start_marker)
+    if si == -1:
+        return text
+    si += len(start_marker)
+    ei = text.find(end_marker, si)
+    return text[si:ei].strip() if ei != -1 else text[si:].strip()
+
+
+async def verify_summaries_for_structure(structure, model=None, max_retries: int = 1):
+    """Check each node's summary against its section content; re-summarize once
+    if topics are missed. Uses the fast model for verification."""
+    nodes = structure_to_list(structure)
+
+    async def verify_one(node):
+        if not node.get("summary") or not node.get("text"):
+            return
+        section_text = _extract_section_content(node["text"])
+        verify_prompt = get_prompt(
+            "verify_node_summary", _prompt_style,
+            title=node.get("title", ""),
+            section_text=section_text,
+            summary=node["summary"],
+        )
+        try:
+            response = await llm_acompletion(
+                model=_model_name_fast, prompt=verify_prompt, json_mode=True,
+            )
+            parsed = extract_json(response)
+        except Exception as exc:
+            log.warning(f"verify_node_summary failed for '{node.get('title')}': {exc}")
+            return
+
+        faithful = parsed.get("faithful", "no")
+        missed = parsed.get("missed_topics") or []
+        if faithful == "yes" and not missed:
+            return
+        if not missed:
+            return  # nothing actionable
+
+        for _ in range(max_retries):
+            regen_prompt = get_prompt(
+                "regenerate_summary_with_missed_topics", _prompt_style,
+                node_text=node["text"],
+                prior_summary=node["summary"],
+                missed_topics=missed,
+            )
+            try:
+                node["summary"] = await llm_acompletion(
+                    model=_model_name_fast, prompt=regen_prompt,
+                )
+            except Exception as exc:
+                log.warning(f"regenerate_summary failed for '{node.get('title')}': {exc}")
+                return
+
+    await asyncio.gather(*[verify_one(n) for n in nodes])
+    return structure
+
+
 def generate_doc_description(structure, model=None):
-    prompt = f"""Your are an expert in generating descriptions for a document.
-    You are given a structure of a document. Your task is to generate a one-sentence description for the document, which makes it easy to distinguish the document from other documents.
-
-    Document Structure: {structure}
-
-    Directly return the description, do not include any other text."""
-
+    prompt = get_prompt("generate_doc_description", _prompt_style, structure=structure)
     return llm_completion(model, prompt)
 
 
@@ -1480,7 +1603,7 @@ async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
 
     logger.info({"total_pages": len(page_list), "total_tokens": sum(p[1] for p in page_list)})
 
-    # Build tree structure
+    # 1. Check for TOC
     check_toc_result = check_toc(page_list, opt)
     logger.info({"check_toc_result": str(check_toc_result)})
 
@@ -1526,10 +1649,13 @@ async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
     if opt.if_add_node_id == "yes":
         write_node_id(tree_nodes)
 
-    # Add summaries
+    # Add summaries (with optional adjacent-page overlap context + fidelity verify)
     if opt.if_add_node_summary == "yes":
-        add_node_text(tree_nodes, page_list)
+        overlap_pages = tree_cfg.get("summary_overlap_pages", 1)
+        add_node_text(tree_nodes, page_list, overlap_pages=overlap_pages)
         await generate_summaries_for_structure(tree_nodes, model=model)
+        if tree_cfg.get("verify_summaries", True):
+            await verify_summaries_for_structure(tree_nodes, model=model)
         remove_structure_text(tree_nodes)
 
     # Doc description

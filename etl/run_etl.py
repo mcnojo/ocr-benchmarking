@@ -94,7 +94,14 @@ async def process_single_pdf(
     pages_dir = Path(config["output"]["kb_root"]) / paper_id / "assets" / "pages"
     tree = assign_elements_to_tree(tree, page_elements, pdf_path, pages_dir, config)
 
-    # Step 5: Save
+    # Step 5: Figure-aware re-summarization (Stage E)
+    if config["enrichment"].get("figure_aware_resummarize", True):
+        from pipeline.resummarizer import resummarize_with_figures
+        console.print("  [yellow]Re-summarizing with figure context...[/yellow]")
+        tree = await resummarize_with_figures(tree)
+        console.print("  [green]✓[/green] Figure-aware summaries written")
+
+    # Step 6: Save
     _save_tree(tree, tree_path, config)
     console.print(f"  [bold green]✓ Done:[/bold green] {tree_path}")
     return tree_path
