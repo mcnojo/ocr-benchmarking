@@ -1,11 +1,13 @@
 from __future__ import annotations
 import asyncio
 import base64
+import time
 from pathlib import Path
 from openai import AsyncOpenAI
 
 from .node_schema import TreeNode, DocumentTree, VisualElement, NodeSource
 from .chem_extractor import extract_chem_entities, load_seed_entities
+from . import tree_builder  # for the run-scoped logger (_current_logger)
 
 
 # ─── Prompt templates ─────────────────────────────────────────────────────────
@@ -54,6 +56,13 @@ def _image_to_b64(image_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
+def _record_vision_call(label: str, duration_s: float, errored: bool) -> None:
+    """Push a VLM/OCR call timing into the run-scoped JsonLogger if one is set."""
+    logger = getattr(tree_builder, "_current_logger", None)
+    if logger is not None:
+        logger.record_llm_call(label, duration_s, error=errored)
+
+
 class Enricher:
     """Enriches visual elements via VLM descriptions and OCR."""
 
@@ -72,42 +81,58 @@ class Enricher:
     async def _vlm_describe(self, image_path: str, element_type: str) -> str:
         b64 = _image_to_b64(image_path)
         prompt = VLM_PROMPTS.get(element_type, VLM_PROMPTS["figure"])
-        async with self.semaphore:
-            response = await self.client.chat.completions.create(
-                model=self.vlm_model,
-                messages=[
-                    {"role": "system", "content": VLM_SYSTEM},
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                            {"type": "text", "text": prompt},
-                        ],
-                    },
-                ],
-                max_tokens=1024,
-                temperature=0.1,
-            )
-        return response.choices[0].message.content
+        t0 = time.perf_counter()
+        errored = False
+        try:
+            async with self.semaphore:
+                response = await self.client.chat.completions.create(
+                    model=self.vlm_model,
+                    messages=[
+                        {"role": "system", "content": VLM_SYSTEM},
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                                {"type": "text", "text": prompt},
+                            ],
+                        },
+                    ],
+                    max_tokens=1024,
+                    temperature=0.1,
+                )
+            return response.choices[0].message.content
+        except Exception:
+            errored = True
+            raise
+        finally:
+            _record_vision_call(f"vlm:{self.vlm_model}", time.perf_counter() - t0, errored)
 
     async def _ocr_extract(self, image_path: str) -> str:
         b64 = _image_to_b64(image_path)
-        async with self.semaphore:
-            response = await self.client.chat.completions.create(
-                model=self.ocr_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                            {"type": "text", "text": OCR_PROMPT},
-                        ],
-                    },
-                ],
-                max_tokens=2048,
-                temperature=0.0,
-            )
-        return response.choices[0].message.content
+        t0 = time.perf_counter()
+        errored = False
+        try:
+            async with self.semaphore:
+                response = await self.client.chat.completions.create(
+                    model=self.ocr_model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                                {"type": "text", "text": OCR_PROMPT},
+                            ],
+                        },
+                    ],
+                    max_tokens=2048,
+                    temperature=0.0,
+                )
+            return response.choices[0].message.content
+        except Exception:
+            errored = True
+            raise
+        finally:
+            _record_vision_call(f"ocr:{self.ocr_model}", time.perf_counter() - t0, errored)
 
     async def enrich_element(self, element: dict, run_vlm: bool, run_ocr: bool) -> dict:
         tasks = []

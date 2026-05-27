@@ -35,6 +35,7 @@ import os
 import random
 import re
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
@@ -67,7 +68,17 @@ _max_response_tokens: int = 8192   # cloud response cap (OpenAI max_tokens / Ant
 _ollama_base: str = ""             # Ollama native API base (without /v1), empty if non-Ollama
 _active_model: str | None = None   # currently loaded model in VRAM (Ollama only)
 
+# Metrics logger set by build_tree_async / run_etl; LLM helpers record call
+# timings into it without explicit threading.
+_current_logger: "JsonLogger | None" = None
+
 log = logging.getLogger("tree_builder")
+
+
+def set_logger(logger: "JsonLogger | None") -> None:
+    """Register a JsonLogger so LLM helpers can record call timings into it."""
+    global _current_logger
+    _current_logger = logger
 
 
 def _init_clients(config: dict):
@@ -248,45 +259,63 @@ def _openai_chat_kwargs(model: str, messages: list, temperature: float, json_mod
 
 
 def _call_sync(model: str, messages: list, temperature: float, json_mode: bool) -> tuple[str, str]:
-    if _provider == "anthropic":
-        system, anth_messages = _openai_messages_to_anthropic(messages)
-        kwargs = {
-            "model": model,
-            "max_tokens": _max_response_tokens,
-            "temperature": temperature,
-            "messages": anth_messages,
-        }
-        if system:
-            kwargs["system"] = system
-        response = _anthropic_sync_client.messages.create(**kwargs)
-        return _anthropic_extract(response)
+    t0 = time.perf_counter()
+    errored = False
+    try:
+        if _provider == "anthropic":
+            system, anth_messages = _openai_messages_to_anthropic(messages)
+            kwargs = {
+                "model": model,
+                "max_tokens": _max_response_tokens,
+                "temperature": temperature,
+                "messages": anth_messages,
+            }
+            if system:
+                kwargs["system"] = system
+            response = _anthropic_sync_client.messages.create(**kwargs)
+            return _anthropic_extract(response)
 
-    kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
-    response = _sync_client.chat.completions.create(**kwargs)
-    content = response.choices[0].message.content or ""
-    finish = response.choices[0].finish_reason
-    return content, finish
+        kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
+        response = _sync_client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content or ""
+        finish = response.choices[0].finish_reason
+        return content, finish
+    except Exception:
+        errored = True
+        raise
+    finally:
+        if _current_logger is not None:
+            _current_logger.record_llm_call(model, time.perf_counter() - t0, error=errored)
 
 
 async def _call_async(model: str, messages: list, temperature: float, json_mode: bool) -> tuple[str, str]:
-    if _provider == "anthropic":
-        system, anth_messages = _openai_messages_to_anthropic(messages)
-        kwargs = {
-            "model": model,
-            "max_tokens": _max_response_tokens,
-            "temperature": temperature,
-            "messages": anth_messages,
-        }
-        if system:
-            kwargs["system"] = system
-        response = await _anthropic_async_client.messages.create(**kwargs)
-        return _anthropic_extract(response)
+    t0 = time.perf_counter()
+    errored = False
+    try:
+        if _provider == "anthropic":
+            system, anth_messages = _openai_messages_to_anthropic(messages)
+            kwargs = {
+                "model": model,
+                "max_tokens": _max_response_tokens,
+                "temperature": temperature,
+                "messages": anth_messages,
+            }
+            if system:
+                kwargs["system"] = system
+            response = await _anthropic_async_client.messages.create(**kwargs)
+            return _anthropic_extract(response)
 
-    kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
-    response = await _async_client.chat.completions.create(**kwargs)
-    content = response.choices[0].message.content or ""
-    finish = response.choices[0].finish_reason
-    return content, finish
+        kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
+        response = await _async_client.chat.completions.create(**kwargs)
+        content = response.choices[0].message.content or ""
+        finish = response.choices[0].finish_reason
+        return content, finish
+    except Exception:
+        errored = True
+        raise
+    finally:
+        if _current_logger is not None:
+            _current_logger.record_llm_call(model, time.perf_counter() - t0, error=errored)
 
 
 def llm_completion(
@@ -726,22 +755,87 @@ def create_clean_structure_for_description(structure):
 # ─── JSON logger (from PageIndex) ─────────────────────────────────────────────
 
 class JsonLogger:
-    def __init__(self, log_dir: str = "./logs"):
+    """Pipeline run log + metrics"""
+
+    def __init__(self, log_dir: str = "./logs", paper_id: str = "run"):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.filename = f"tree_builder_{ts}.json"
+        self.paper_id = paper_id
+        self.filename = f"{paper_id}_{ts}.json"
         os.makedirs(log_dir, exist_ok=True)
         self._dir = log_dir
-        self.log_data = []
+        self.log_data: list = []
+        self._stages: dict[str, dict] = {}
+        self._llm_calls: dict[str, dict] = {}
+        self._counts: dict = {}
+        self._t0 = time.perf_counter()
 
     def info(self, message):
         self.log_data.append(
             message if isinstance(message, dict) else {"message": message}
         )
-        with open(os.path.join(self._dir, self.filename), "w") as f:
-            json.dump(self.log_data, f, indent=2)
+        self._save()
 
     def error(self, message):
         self.info(message)
+
+    @contextmanager
+    def stage(self, name: str):
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self._stages[name] = {"duration_s": round(time.perf_counter() - t0, 3)}
+            self._save()
+
+    def record_llm_call(self, model: str, duration_s: float, error: bool = False):
+        bucket = self._llm_calls.setdefault(
+            model, {"count": 0, "total_s": 0.0, "errors": 0}
+        )
+        bucket["count"] += 1
+        bucket["total_s"] += duration_s
+        if error:
+            bucket["errors"] += 1
+
+    def record_stage_calls(self, name: str, count: int, total_s: float):
+        """Record a stage that bundles many external calls (e.g. VLM/OCR)."""
+        entry = self._stages.setdefault(name, {})
+        entry["call_count"] = entry.get("call_count", 0) + count
+        entry["call_total_s"] = round(entry.get("call_total_s", 0.0) + total_s, 3)
+        if entry["call_count"]:
+            entry["call_avg_s"] = round(entry["call_total_s"] / entry["call_count"], 3)
+        self._save()
+
+    def record_counts(self, **counts):
+        self._counts.update(counts)
+        self._save()
+
+    def finalize(self):
+        self._save()
+
+    def _metrics(self) -> dict:
+        return {
+            "total_runtime_s": round(time.perf_counter() - self._t0, 3),
+            "stages": self._stages,
+            "counts": self._counts,
+            "llm_calls": {
+                m: {
+                    "count": d["count"],
+                    "total_s": round(d["total_s"], 3),
+                    "avg_s": round(d["total_s"] / d["count"], 3) if d["count"] else 0,
+                    "errors": d["errors"],
+                }
+                for m, d in self._llm_calls.items()
+            },
+        }
+
+    def _save(self):
+        payload = {
+            "paper_id": self.paper_id,
+            "metrics": self._metrics(),
+            "events": self.log_data,
+        }
+        with open(os.path.join(self._dir, self.filename), "w") as f:
+            json.dump(payload, f, indent=2)
 
 
 # ─── TOC detection & extraction ───────────────────────────────────────────────
@@ -1573,8 +1667,15 @@ def generate_doc_description(structure, model=None):
 
 # ─── Public entry points ─────────────────────────────────────────────────────
 
-async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
-    """Build a document tree from a PDF. Returns a DocumentTree (no enrichment)."""
+async def build_tree_async(
+    pdf_path: str, config: dict, logger: "JsonLogger | None" = None,
+) -> DocumentTree:
+    """Build a document tree from a PDF. Returns a DocumentTree (no enrichment).
+
+    If logger is provided it is used for events + metrics else one is
+    created with paper_id derived from the PDF filename. 
+    The logger is also registered as the module-level logger so LLM helpers record into it.
+    """
     tree_cfg = config["tree"]
     model = config["tree_llm"]["model"]
 
@@ -1592,7 +1693,11 @@ async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
 
     _init_clients(config)
 
-    logger = JsonLogger()
+    paper_id = Path(pdf_path).stem
+    if logger is None:
+        logger = JsonLogger(paper_id=paper_id)
+    set_logger(logger)
+
     page_list = get_page_tokens(pdf_path, model=model)
 
     if is_likely_scanned(page_list):
@@ -1602,67 +1707,74 @@ async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
         )
 
     logger.info({"total_pages": len(page_list), "total_tokens": sum(p[1] for p in page_list)})
+    logger.record_counts(total_pages=len(page_list))
 
     # 1. Check for TOC
-    check_toc_result = check_toc(page_list, opt)
+    with logger.stage("check_toc"):
+        check_toc_result = check_toc(page_list, opt)
     logger.info({"check_toc_result": str(check_toc_result)})
 
     has_toc = (check_toc_result.get("toc_content")
                and check_toc_result["toc_content"].strip())
 
-    if has_toc and check_toc_result["page_index_given_in_toc"] == "yes":
-        toc = await meta_processor(
-            page_list, mode="process_toc_with_page_numbers",
-            start_index=1,
-            toc_content=check_toc_result["toc_content"],
-            toc_page_list=check_toc_result["toc_page_list"],
-            opt=opt, logger=logger,
+    with logger.stage("structure_generation"):
+        if has_toc and check_toc_result["page_index_given_in_toc"] == "yes":
+            toc = await meta_processor(
+                page_list, mode="process_toc_with_page_numbers",
+                start_index=1,
+                toc_content=check_toc_result["toc_content"],
+                toc_page_list=check_toc_result["toc_page_list"],
+                opt=opt, logger=logger,
+            )
+        elif has_toc:
+            toc = await meta_processor(
+                page_list, mode="process_toc_no_page_numbers",
+                start_index=1,
+                toc_content=check_toc_result["toc_content"],
+                toc_page_list=check_toc_result["toc_page_list"],
+                opt=opt, logger=logger,
+            )
+        else:
+            toc = await meta_processor(
+                page_list, mode="process_no_toc",
+                start_index=1, opt=opt, logger=logger,
+            )
+
+    with logger.stage("title_appearance_verification"):
+        toc = add_preface_if_needed(toc)
+        toc = await check_title_appearance_in_start_concurrent(
+            toc, page_list, model=opt.model, logger=logger,
         )
-    elif has_toc:
-        toc = await meta_processor(
-            page_list, mode="process_toc_no_page_numbers",
-            start_index=1,
-            toc_content=check_toc_result["toc_content"],
-            toc_page_list=check_toc_result["toc_page_list"],
-            opt=opt, logger=logger,
-        )
-    else:
-        toc = await meta_processor(
-            page_list, mode="process_no_toc",
-            start_index=1, opt=opt, logger=logger,
+
+    with logger.stage("post_processing_and_subdivision"):
+        valid_toc = [item for item in toc if item.get("physical_index") is not None]
+        tree_nodes = post_processing(valid_toc, len(page_list))
+        await asyncio.gather(
+            *[process_large_node_recursively(node, page_list, opt, logger) for node in tree_nodes]
         )
 
-    toc = add_preface_if_needed(toc)
-    toc = await check_title_appearance_in_start_concurrent(
-        toc, page_list, model=opt.model, logger=logger,
-    )
-
-    valid_toc = [item for item in toc if item.get("physical_index") is not None]
-    tree_nodes = post_processing(valid_toc, len(page_list))
-
-    # Subdivide large nodes
-    await asyncio.gather(
-        *[process_large_node_recursively(node, page_list, opt, logger) for node in tree_nodes]
-    )
-
-    # Add node IDs
-    if opt.if_add_node_id == "yes":
-        write_node_id(tree_nodes)
+        if opt.if_add_node_id == "yes":
+            write_node_id(tree_nodes)
 
     # Add summaries (with optional adjacent-page overlap context + fidelity verify)
     if opt.if_add_node_summary == "yes":
-        overlap_pages = tree_cfg.get("summary_overlap_pages", 1)
-        add_node_text(tree_nodes, page_list, overlap_pages=overlap_pages)
-        await generate_summaries_for_structure(tree_nodes, model=model)
+        with logger.stage("summary_generation"):
+            overlap_pages = tree_cfg.get("summary_overlap_pages", 1)
+            add_node_text(tree_nodes, page_list, overlap_pages=overlap_pages)
+            await generate_summaries_for_structure(tree_nodes, model=model)
+
         if tree_cfg.get("verify_summaries", True):
-            await verify_summaries_for_structure(tree_nodes, model=model)
+            with logger.stage("summary_verification"):
+                await verify_summaries_for_structure(tree_nodes, model=model)
+
         remove_structure_text(tree_nodes)
 
     # Doc description
     doc_description = None
     if opt.if_add_doc_description == "yes":
-        clean = create_clean_structure_for_description(tree_nodes)
-        doc_description = generate_doc_description(clean, model=model)
+        with logger.stage("doc_description"):
+            clean = create_clean_structure_for_description(tree_nodes)
+            doc_description = generate_doc_description(clean, model=model)
 
     # Format and convert to Pydantic models
     tree_nodes = format_structure(
@@ -1670,8 +1782,10 @@ async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
         order=["title", "node_id", "start_index", "end_index", "summary", "nodes"],
     )
 
-    paper_id = Path(pdf_path).stem
     root_nodes = _dicts_to_tree_nodes(tree_nodes)
+
+    node_count = sum(1 for _ in _flatten_nodes(root_nodes))
+    logger.record_counts(node_count=node_count)
 
     return DocumentTree(
         paper_id=paper_id,
@@ -1680,6 +1794,12 @@ async def build_tree_async(pdf_path: str, config: dict) -> DocumentTree:
         doc_description=doc_description,
         root_nodes=root_nodes,
     )
+
+
+def _flatten_nodes(nodes):
+    for n in nodes:
+        yield n
+        yield from _flatten_nodes(n.nodes)
 
 
 def _dicts_to_tree_nodes(nodes: list[dict]) -> list[TreeNode]:
