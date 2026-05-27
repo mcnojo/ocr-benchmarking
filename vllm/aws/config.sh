@@ -3,7 +3,8 @@
 
 AWS_REGION="us-west-2"
 INSTANCE_TYPE="g6.xlarge"               # 1x L4 24GB
-KEY_NAME="deepseek-ocr-key"
+# KEY_NAME="deepseek-ocr-key" # for personal mac
+KEY_NAME="ocr-bench-mac"
 KEY_FILE="$HOME/.ssh/${KEY_NAME}.pem"
 SECURITY_GROUP_NAME="ocr-bench-vllm"
 

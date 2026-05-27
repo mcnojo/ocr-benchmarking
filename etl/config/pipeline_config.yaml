@@ -43,10 +43,10 @@ tree_llm:
 # ─── Vision server (VLM + OCR models, any OpenAI-compatible endpoint) ─────────
 # Works with vLLM, Ollama, MLX, or any server exposing /v1/chat/completions
 vision_server:
-  base_url: "http://localhost:8000/v1"
-  api_key: "EMPTY"                    # vLLM default; set "local" for MLX/Ollama
-  vlm_model: "Qwen/Qwen2.5-VL-7B-Instruct"
-  ocr_model: "deepseek-ai/deepseek-ocr-1.5"
+  base_url: "http://35.164.17.138:8004/v1"   # chandra on EC2 (vllm/aws/instances/chandra.ip)
+  api_key: "EMPTY"                           # vLLM default
+  vlm_model: "datalab-to/chandra-ocr-2"      # single chandra instance serves both VLM and OCR
+  ocr_model: "datalab-to/chandra-ocr-2"
 
 # ─── Tree building ─────────────────────────────────────────────────────────────
 tree:

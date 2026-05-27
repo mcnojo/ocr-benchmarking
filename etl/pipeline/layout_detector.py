@@ -3,6 +3,10 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image
 from doclayout_yolo import YOLOv10
+from huggingface_hub import hf_hub_download
+
+_HF_REPO = "juliozhao/DocLayout-YOLO-DocStructBench"
+_HF_FILE = "doclayout_yolo_docstructbench_imgsz1024.pt"
 
 
 @dataclass
@@ -20,10 +24,9 @@ class LayoutDetector:
     def __init__(self, config: dict):
         layout_cfg = config["layout"]
         model_path = layout_cfg.get("model_path")
-        if model_path:
-            self.model = YOLOv10(model_path)
-        else:
-            self.model = YOLOv10("doclayout_yolo_docstructbench_imgsz1024.pt")
+        if not model_path:
+            model_path = hf_hub_download(repo_id=_HF_REPO, filename=_HF_FILE)
+        self.model = YOLOv10(model_path)
 
         self.conf = layout_cfg["confidence_threshold"]
         self.iou = layout_cfg["iou_threshold"]
