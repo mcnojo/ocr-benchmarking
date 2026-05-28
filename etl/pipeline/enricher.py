@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 
 from .node_schema import TreeNode, DocumentTree, VisualElement, NodeSource
 from .chem_extractor import extract_chem_entities, load_seed_entities
+from .chandra_parser import parse as parse_chandra
 from . import tree_builder  # for the run-scoped logger (_current_logger)
 
 
@@ -153,6 +154,9 @@ class Enricher:
                     element[key] = f"ERROR: {result}"
                 else:
                     element[key] = result
+
+            if isinstance(element.get("ocr_text"), str) and not element["ocr_text"].startswith("ERROR:"):
+                element["ocr_parsed"] = parse_chandra(element["ocr_text"])
 
         return element
 

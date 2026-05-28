@@ -79,7 +79,7 @@ rendering:
 
 # ─── Enrichment ───────────────────────────────────────────────────────────────
 enrichment:
-  run_vlm_description: true
+  run_vlm_description: false           # keeping off for now, may gut entirely
   run_ocr: true
   run_chem_entity_extraction: true
   max_concurrent_enrichments: 4
