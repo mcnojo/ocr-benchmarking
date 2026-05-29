@@ -18,7 +18,6 @@ class VisualElement(BaseModel):
     bbox: BoundingBox
     asset_path: str
     caption: Optional[str] = None
-    vlm_description: Optional[str] = None
     ocr_text: Optional[str] = None
     ocr_parsed: Optional[dict] = None  # normalized chandra output (see chandra_parser.py)
     chem_entities: list[str] = Field(default_factory=list)

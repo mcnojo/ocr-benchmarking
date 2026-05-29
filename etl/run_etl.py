@@ -106,9 +106,9 @@ async def process_single_pdf(
             f"eq={by_type.get('isolate_formula', 0)})"
         )
 
-        # Step 3: Enrich with VLM + OCR
-        console.print("  [yellow]Running VLM enrichment...[/yellow]")
-        with logger.stage("vlm_ocr_enrichment"):
+        # Step 3: Enrich with OCR
+        console.print("  [yellow]Running OCR enrichment...[/yellow]")
+        with logger.stage("ocr_enrichment"):
             enricher = Enricher(config)
             page_elements = await enricher.enrich_all(page_elements, config)
         # Per-call timing is recorded inside the enricher into the current logger
@@ -146,7 +146,7 @@ async def process_single_pdf(
 )
 @click.option(
     "--skip-enrichment", is_flag=True, default=False,
-    help="Skip VLM/OCR enrichment; build tree structure only.",
+    help="Skip OCR enrichment; build tree structure only.",
 )
 @click.option(
     "--workers", default=1, show_default=True,

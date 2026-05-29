@@ -102,7 +102,6 @@ class AssetExtractor:
                 ),
                 "asset_path": str(asset_path.resolve()),
                 "caption": caption_text,
-                "vlm_description": None,
                 "ocr_text": None,
                 "chem_entities": [],
                 "structured_data": None,

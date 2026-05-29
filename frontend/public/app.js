@@ -22,7 +22,7 @@ function rawBlock(content) {
 }
 
 // Render an <analyze>[…]</analyze> block (chandra "figure analysis" schema) as a <dl>.
-// Used for both VLM descriptions and figure-OCR (chandra returns the same shape for both).
+// Used for figure-OCR output.
 function renderAnalyze(jsonStr) {
   let parsed;
   try { parsed = JSON.parse(jsonStr); }
@@ -86,18 +86,16 @@ function renderVisuals(els) {
   return `<div class="visuals">` + els.map((e) => {
     const img = e.asset_path ? `<img src="${assetUrl(e.asset_path)}" alt="${esc(e.element_id)}">` : "";
     const cap = e.caption ? `<p class="caption">${esc(e.caption)}</p>` : "";
-    const vlm = e.vlm_description
-      ? `<div class="block"><h4>VLM</h4><div class="vlm">${renderChandra(e.vlm_description)}</div></div>` : "";
     const ocrBody = e.ocr_parsed ? renderParsed(e.ocr_parsed)
                   : e.ocr_text   ? renderChandra(e.ocr_text)
                   : "";
-    const ocr = ocrBody ? `<div class="block"><h4>OCR</h4><div class="ocr vlm">${ocrBody}</div></div>` : "";
+    const ocr = ocrBody ? `<div class="block"><h4>OCR</h4><div class="ocr">${ocrBody}</div></div>` : "";
     const chems = e.chem_entities?.length
       ? `<div class="block"><h4>Chem entities</h4><div class="chems">${e.chem_entities.map((c) => `<span>${esc(c)}</span>`).join("")}</div></div>` : "";
     return `
       <details class="visual" data-t="${esc(e.element_type)}">
         <summary><code>${esc(e.element_id)}</code><span class="type">${esc(e.element_type)}</span><span style="color:#556;font-size:0.7rem;">p${e.page_index}</span></summary>
-        <div class="visual-body">${img}${cap}${vlm}${ocr}${chems}</div>
+        <div class="visual-body">${img}${cap}${ocr}${chems}</div>
       </details>`;
   }).join("") + `</div>`;
 }

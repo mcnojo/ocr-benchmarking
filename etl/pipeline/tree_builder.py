@@ -242,6 +242,16 @@ def _anthropic_extract(response) -> tuple[str, str]:
     return content, finish
 
 
+def _usage_openai(response) -> tuple[int, int]:
+    u = getattr(response, "usage", None)
+    return (getattr(u, "prompt_tokens", 0) or 0, getattr(u, "completion_tokens", 0) or 0) if u else (0, 0)
+
+
+def _usage_anthropic(response) -> tuple[int, int]:
+    u = getattr(response, "usage", None)
+    return (getattr(u, "input_tokens", 0) or 0, getattr(u, "output_tokens", 0) or 0) if u else (0, 0)
+
+
 def _openai_chat_kwargs(model: str, messages: list, temperature: float, json_mode: bool) -> dict:
     kwargs: dict = {"model": model, "messages": messages, "temperature": temperature}
     if _provider == "ollama":
@@ -261,6 +271,7 @@ def _openai_chat_kwargs(model: str, messages: list, temperature: float, json_mod
 def _call_sync(model: str, messages: list, temperature: float, json_mode: bool) -> tuple[str, str]:
     t0 = time.perf_counter()
     errored = False
+    usage = (0, 0)
     try:
         if _provider == "anthropic":
             system, anth_messages = _openai_messages_to_anthropic(messages)
@@ -273,10 +284,12 @@ def _call_sync(model: str, messages: list, temperature: float, json_mode: bool) 
             if system:
                 kwargs["system"] = system
             response = _anthropic_sync_client.messages.create(**kwargs)
+            usage = _usage_anthropic(response)
             return _anthropic_extract(response)
 
         kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
         response = _sync_client.chat.completions.create(**kwargs)
+        usage = _usage_openai(response)
         content = response.choices[0].message.content or ""
         finish = response.choices[0].finish_reason
         return content, finish
@@ -285,12 +298,16 @@ def _call_sync(model: str, messages: list, temperature: float, json_mode: bool) 
         raise
     finally:
         if _current_logger is not None:
-            _current_logger.record_llm_call(model, time.perf_counter() - t0, error=errored)
+            _current_logger.record_llm_call(
+                model, time.perf_counter() - t0, error=errored,
+                input_tokens=usage[0], output_tokens=usage[1],
+            )
 
 
 async def _call_async(model: str, messages: list, temperature: float, json_mode: bool) -> tuple[str, str]:
     t0 = time.perf_counter()
     errored = False
+    usage = (0, 0)
     try:
         if _provider == "anthropic":
             system, anth_messages = _openai_messages_to_anthropic(messages)
@@ -303,10 +320,12 @@ async def _call_async(model: str, messages: list, temperature: float, json_mode:
             if system:
                 kwargs["system"] = system
             response = await _anthropic_async_client.messages.create(**kwargs)
+            usage = _usage_anthropic(response)
             return _anthropic_extract(response)
 
         kwargs = _openai_chat_kwargs(model, messages, temperature, json_mode)
         response = await _async_client.chat.completions.create(**kwargs)
+        usage = _usage_openai(response)
         content = response.choices[0].message.content or ""
         finish = response.choices[0].finish_reason
         return content, finish
@@ -315,7 +334,10 @@ async def _call_async(model: str, messages: list, temperature: float, json_mode:
         raise
     finally:
         if _current_logger is not None:
-            _current_logger.record_llm_call(model, time.perf_counter() - t0, error=errored)
+            _current_logger.record_llm_call(
+                model, time.perf_counter() - t0, error=errored,
+                input_tokens=usage[0], output_tokens=usage[1],
+            )
 
 
 def llm_completion(
@@ -787,17 +809,27 @@ class JsonLogger:
             self._stages[name] = {"duration_s": round(time.perf_counter() - t0, 3)}
             self._save()
 
-    def record_llm_call(self, model: str, duration_s: float, error: bool = False):
+    def record_llm_call(
+        self,
+        model: str,
+        duration_s: float,
+        error: bool = False,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ):
         bucket = self._llm_calls.setdefault(
-            model, {"count": 0, "total_s": 0.0, "errors": 0}
+            model,
+            {"count": 0, "total_s": 0.0, "errors": 0, "input_tokens": 0, "output_tokens": 0},
         )
         bucket["count"] += 1
         bucket["total_s"] += duration_s
+        bucket["input_tokens"] += int(input_tokens or 0)
+        bucket["output_tokens"] += int(output_tokens or 0)
         if error:
             bucket["errors"] += 1
 
     def record_stage_calls(self, name: str, count: int, total_s: float):
-        """Record a stage that bundles many external calls (e.g. VLM/OCR)."""
+        """Record a stage that bundles many external calls (e.g. OCR)."""
         entry = self._stages.setdefault(name, {})
         entry["call_count"] = entry.get("call_count", 0) + count
         entry["call_total_s"] = round(entry.get("call_total_s", 0.0) + total_s, 3)
@@ -813,18 +845,31 @@ class JsonLogger:
         self._save()
 
     def _metrics(self) -> dict:
+        per_model = {}
+        tot_in = tot_out = 0
+        for m, d in self._llm_calls.items():
+            in_t = d.get("input_tokens", 0)
+            out_t = d.get("output_tokens", 0)
+            tot_in += in_t
+            tot_out += out_t
+            per_model[m] = {
+                "count": d["count"],
+                "total_s": round(d["total_s"], 3),
+                "avg_s": round(d["total_s"] / d["count"], 3) if d["count"] else 0,
+                "errors": d["errors"],
+                "input_tokens": in_t,
+                "output_tokens": out_t,
+                "total_tokens": in_t + out_t,
+            }
         return {
             "total_runtime_s": round(time.perf_counter() - self._t0, 3),
             "stages": self._stages,
             "counts": self._counts,
-            "llm_calls": {
-                m: {
-                    "count": d["count"],
-                    "total_s": round(d["total_s"], 3),
-                    "avg_s": round(d["total_s"] / d["count"], 3) if d["count"] else 0,
-                    "errors": d["errors"],
-                }
-                for m, d in self._llm_calls.items()
+            "llm_calls": per_model,
+            "token_totals": {
+                "input_tokens": tot_in,
+                "output_tokens": tot_out,
+                "total_tokens": tot_in + tot_out,
             },
         }
 

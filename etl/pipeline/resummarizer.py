@@ -1,10 +1,10 @@
 """Stage E: figure-aware re-summarization of an enriched DocumentTree.
 
 Leaf nodes with visual_elements are re-summarized using their existing
-text summary + per-figure VLM description, OCR text, caption, and chemistry
-entities. Parent nodes are then re-summarized bottom-up from their children's
-(now figure-aware) summaries. No new OCR or VLM calls are made — we reuse
-what the enricher produced.
+text summary + per-figure OCR text, caption, and chemistry entities.
+Parent nodes are then re-summarized bottom-up from their children's
+(now figure-aware) summaries. No new OCR calls are made — we reuse what
+the enricher produced.
 
 This module runs only when enrichment runs (gated by --skip-enrichment).
 """
@@ -25,8 +25,6 @@ def _format_visual_element(ve: VisualElement) -> str:
     parts = [f"[{ve.element_id}] type={ve.element_type}, page={ve.page_index}"]
     if ve.caption:
         parts.append(f"  caption: {ve.caption}")
-    if ve.vlm_description:
-        parts.append(f"  description: {ve.vlm_description}")
     if ve.ocr_text:
         parts.append(f"  ocr_text: {ve.ocr_text}")
     if ve.chem_entities:

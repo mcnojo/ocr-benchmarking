@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio
 import base64
+import re
 import time
 from pathlib import Path
 from openai import AsyncOpenAI
@@ -12,36 +13,6 @@ from . import tree_builder  # for the run-scoped logger (_current_logger)
 
 
 # ─── Prompt templates ─────────────────────────────────────────────────────────
-# These are intentionally module-level constants so they're easy to find and swap.
-
-VLM_SYSTEM = (
-    "You are an expert in electrochemistry and sodium-ion battery research. "
-    "You are analyzing a visual element extracted from a scientific paper. "
-    "Provide a detailed, precise description. Use correct electrochemical terminology. "
-    "Include any chemical formulas exactly as shown."
-)
-
-VLM_PROMPTS = {
-    "figure": (
-        "Describe this figure from a sodium-ion electrolyte research paper. "
-        "Include: (1) figure type (Nyquist plot, cycling curves, SEM, XRD, etc.), "
-        "(2) axes labels and units, (3) labeled species/compounds/conditions, "
-        "(4) key trends visible in the data, (5) chemical formulas or material names shown."
-    ),
-    "table": (
-        "Describe this table from a sodium-ion electrolyte research paper. "
-        "Include: (1) what property or comparison is presented, "
-        "(2) all column and row headers verbatim, "
-        "(3) key data values for ionic conductivity, electrochemical window, or stability, "
-        "(4) chemical compounds or material names. "
-        "Then reproduce the table in GitHub-flavored markdown."
-    ),
-    "isolate_formula": (
-        "Describe this equation or chemical formula from a sodium-ion research paper. "
-        "Provide: (1) plain-text rendering, (2) LaTeX representation if mathematical, "
-        "(3) IUPAC name if a chemical structure, (4) contextual meaning if inferable."
-    ),
-}
 
 OCR_PROMPT = (
     "Extract all text from this image with high fidelity. "
@@ -57,15 +28,26 @@ def _image_to_b64(image_path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 
-def _record_vision_call(label: str, duration_s: float, errored: bool) -> None:
-    """Push a VLM/OCR call timing into the run-scoped JsonLogger if one is set."""
+def _record_vision_call(
+    label: str, duration_s: float, errored: bool,
+    input_tokens: int = 0, output_tokens: int = 0,
+) -> None:
+    """Push an OCR call timing + token usage into the run-scoped JsonLogger if one is set."""
     logger = getattr(tree_builder, "_current_logger", None)
     if logger is not None:
-        logger.record_llm_call(label, duration_s, error=errored)
+        logger.record_llm_call(
+            label, duration_s, error=errored,
+            input_tokens=input_tokens, output_tokens=output_tokens,
+        )
+
+
+def _openai_usage(response) -> tuple[int, int]:
+    u = getattr(response, "usage", None)
+    return (getattr(u, "prompt_tokens", 0) or 0, getattr(u, "completion_tokens", 0) or 0) if u else (0, 0)
 
 
 class Enricher:
-    """Enriches visual elements via VLM descriptions and OCR."""
+    """Enriches visual elements via OCR."""
 
     def __init__(self, config: dict):
         vllm_cfg = config["vision_server"]
@@ -73,45 +55,16 @@ class Enricher:
             base_url=vllm_cfg["base_url"],
             api_key=vllm_cfg["api_key"],
         )
-        self.vlm_model = vllm_cfg["vlm_model"]
         self.ocr_model = vllm_cfg["ocr_model"]
         self.semaphore = asyncio.Semaphore(
             config["enrichment"]["max_concurrent_enrichments"]
         )
 
-    async def _vlm_describe(self, image_path: str, element_type: str) -> str:
-        b64 = _image_to_b64(image_path)
-        prompt = VLM_PROMPTS.get(element_type, VLM_PROMPTS["figure"])
-        t0 = time.perf_counter()
-        errored = False
-        try:
-            async with self.semaphore:
-                response = await self.client.chat.completions.create(
-                    model=self.vlm_model,
-                    messages=[
-                        {"role": "system", "content": VLM_SYSTEM},
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                                {"type": "text", "text": prompt},
-                            ],
-                        },
-                    ],
-                    max_tokens=1024,
-                    temperature=0.1,
-                )
-            return response.choices[0].message.content
-        except Exception:
-            errored = True
-            raise
-        finally:
-            _record_vision_call(f"vlm:{self.vlm_model}", time.perf_counter() - t0, errored)
-
     async def _ocr_extract(self, image_path: str) -> str:
         b64 = _image_to_b64(image_path)
         t0 = time.perf_counter()
         errored = False
+        usage = (0, 0)
         try:
             async with self.semaphore:
                 response = await self.client.chat.completions.create(
@@ -125,51 +78,40 @@ class Enricher:
                             ],
                         },
                     ],
-                    max_tokens=2048,
+                    max_tokens=4096,
                     temperature=0.0,
                 )
+            usage = _openai_usage(response)
             return response.choices[0].message.content
         except Exception:
             errored = True
             raise
         finally:
-            _record_vision_call(f"ocr:{self.ocr_model}", time.perf_counter() - t0, errored)
+            _record_vision_call(
+                f"ocr:{self.ocr_model}", time.perf_counter() - t0, errored,
+                input_tokens=usage[0], output_tokens=usage[1],
+            )
 
-    async def enrich_element(self, element: dict, run_vlm: bool, run_ocr: bool) -> dict:
-        tasks = []
-        keys = []
-
-        if run_vlm and element.get("asset_path"):
-            tasks.append(self._vlm_describe(element["asset_path"], element["element_type"]))
-            keys.append("vlm_description")
-
-        if run_ocr and element.get("asset_path"):
-            tasks.append(self._ocr_extract(element["asset_path"]))
-            keys.append("ocr_text")
-
-        if tasks:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for key, result in zip(keys, results):
-                if isinstance(result, Exception):
-                    element[key] = f"ERROR: {result}"
-                else:
-                    element[key] = result
-
-            if isinstance(element.get("ocr_text"), str) and not element["ocr_text"].startswith("ERROR:"):
-                element["ocr_parsed"] = parse_chandra(element["ocr_text"])
-
+    async def enrich_element(self, element: dict, run_ocr: bool) -> dict:
+        if not (run_ocr and element.get("asset_path")):
+            return element
+        try:
+            element["ocr_text"] = await self._ocr_extract(element["asset_path"])
+        except Exception as e:
+            element["ocr_text"] = f"ERROR: {e}"
+            return element
+        element["ocr_parsed"] = parse_chandra(element["ocr_text"])
         return element
 
     async def enrich_all(
         self, page_elements: dict[int, list[dict]], config: dict
     ) -> dict[int, list[dict]]:
-        run_vlm = config["enrichment"]["run_vlm_description"]
         run_ocr = config["enrichment"]["run_ocr"]
 
         all_tasks = []
         for elements in page_elements.values():
             for elem in elements:
-                all_tasks.append(self.enrich_element(elem, run_vlm, run_ocr))
+                all_tasks.append(self.enrich_element(elem, run_ocr))
 
         await asyncio.gather(*all_tasks)
         return page_elements
@@ -230,17 +172,16 @@ def assign_elements_to_tree(
             if run_chem:
                 combined_text = " ".join(filter(None, [
                     elem_dict.get("ocr_text", ""),
-                    elem_dict.get("vlm_description", ""),
                     elem_dict.get("caption", ""),
                 ]))
                 elem_dict["chem_entities"] = extract_chem_entities(combined_text, seed_entities)
 
-            # For tables: extract markdown table from VLM description
+            # For tables: pull the first <table>…</table> out of chandra's layout_html OCR.
             if elem_dict["element_type"] == "table":
-                desc = elem_dict.get("vlm_description") or ""
-                table_lines = [l for l in desc.split("\n") if "|" in l]
-                if table_lines:
-                    elem_dict["structured_data"] = "\n".join(table_lines)
+                ocr = elem_dict.get("ocr_text") or ""
+                m = re.search(r"<table[\s\S]*?</table>", ocr, re.IGNORECASE)
+                if m:
+                    elem_dict["structured_data"] = m.group(0)
 
             target_node.visual_elements.append(VisualElement(**elem_dict))
 

@@ -4,8 +4,9 @@ from pathlib import Path
 import yaml
 
 '''
-NOTE: these should be the first pass uses... 
-anything image based should indeed be verified in a second pass by a VLM
+First-pass regex extraction over OCR text + captions. Pure substring + pattern matching;
+no LLM verification stage. Image-derived hits are inherently noisy — downstream consumers
+should treat low-frequency entities accordingly.
 '''
 
 

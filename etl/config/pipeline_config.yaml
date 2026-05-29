@@ -40,12 +40,11 @@ tree_llm:
   num_ctx: 32768                              # Ollama context window (input + output tokens). e4b supports 128K.
   max_response_tokens: 8192                   # cloud response cap (OpenAI/Anthropic max_tokens); ignored by Ollama
 
-# ─── Vision server (VLM + OCR models, any OpenAI-compatible endpoint) ─────────
+# ─── Vision server (OCR model, any OpenAI-compatible endpoint) ────────────────
 # Works with vLLM, Ollama, MLX, or any server exposing /v1/chat/completions
 vision_server:
-  base_url: "http://35.164.17.138:8004/v1"   # chandra on EC2 (vllm/aws/instances/chandra.ip)
+  base_url: "http://35.94.138.87:8004/v1"   # chandra on EC2 (vllm/aws/instances/chandra.ip)
   api_key: "EMPTY"                           # vLLM default
-  vlm_model: "datalab-to/chandra-ocr-2"      # single chandra instance serves both VLM and OCR
   ocr_model: "datalab-to/chandra-ocr-2"
 
 # ─── Tree building ─────────────────────────────────────────────────────────────
@@ -79,7 +78,6 @@ rendering:
 
 # ─── Enrichment ───────────────────────────────────────────────────────────────
 enrichment:
-  run_vlm_description: false           # keeping off for now, may gut entirely
   run_ocr: true
   run_chem_entity_extraction: true
   max_concurrent_enrichments: 4
