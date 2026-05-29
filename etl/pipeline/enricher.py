@@ -9,7 +9,20 @@ from openai import AsyncOpenAI
 from .node_schema import TreeNode, DocumentTree, VisualElement, NodeSource
 from .chem_extractor import extract_chem_entities, load_seed_entities
 from .chandra_parser import parse as parse_chandra
+from .property_extractor import extract_from_element
 from . import tree_builder  # for the run-scoped logger (_current_logger)
+import yaml as _yaml
+from pathlib import Path as _Path
+
+
+def load_seed_smiles(config_dir: str) -> dict[str, str]:
+    """Optional curated name→SMILES map (config/chem_smiles.yaml). Empty if absent."""
+    path = _Path(config_dir) / "chem_smiles.yaml"
+    if not path.exists():
+        return {}
+    with open(path) as f:
+        data = _yaml.safe_load(f) or {}
+    return data.get("smiles", {}) or {}
 
 
 # ─── Prompt templates ─────────────────────────────────────────────────────────
@@ -136,9 +149,12 @@ def assign_elements_to_tree(
     config: dict,
 ) -> DocumentTree:
     """Attach visual elements to the deepest tree node whose page range contains them."""
+    config_dir = config.get("_config_dir", "config")
     seed_entities = load_seed_entities(
-        str(Path(config.get("_config_dir", "config")) / "chem_entities.yaml")
+        str(Path(config_dir) / "chem_entities.yaml")
     )
+    run_properties = config["enrichment"].get("run_property_extraction", True)
+    seed_smiles = load_seed_smiles(config_dir) if run_properties else {}
     flat_nodes = flatten_tree(tree.root_nodes)
 
     # Build page -> deepest node mapping (later = deeper in DFS order)
@@ -182,6 +198,16 @@ def assign_elements_to_tree(
                 m = re.search(r"<table[\s\S]*?</table>", ocr, re.IGNORECASE)
                 if m:
                     elem_dict["structured_data"] = m.group(0)
+
+            # Typed molecule↔property↔conditions extraction (the calibration-set source).
+            if run_properties:
+                try:
+                    recs = extract_from_element(elem_dict, tree.paper_id, seed_smiles)
+                except Exception as e:  # extraction must never sink a run
+                    recs = []
+                    elem_dict.setdefault("_property_error", str(e))
+                elem_dict["property_records"] = [r.model_dump() for r in recs]
+                tree.property_records.extend(recs)
 
             target_node.visual_elements.append(VisualElement(**elem_dict))
 

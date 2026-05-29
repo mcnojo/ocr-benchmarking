@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import Optional
 from pydantic import BaseModel, Field
 
+from .property_schema import PropertyRecord
+
 
 class BoundingBox(BaseModel):
     """Normalized coordinates [0,1] relative to page dimensions."""
@@ -22,6 +24,7 @@ class VisualElement(BaseModel):
     ocr_parsed: Optional[dict] = None  # normalized chandra output (see chandra_parser.py)
     chem_entities: list[str] = Field(default_factory=list)
     structured_data: Optional[str] = None  # markdown table for tables
+    property_records: list[PropertyRecord] = Field(default_factory=list)  # typed mol↔prop↔conditions
 
 
 class NodeSource(BaseModel):
@@ -49,3 +52,4 @@ class DocumentTree(BaseModel):
     total_pages: int
     doc_description: Optional[str] = None
     root_nodes: list[TreeNode]
+    property_records: list[PropertyRecord] = Field(default_factory=list)  # flattened table for the whole doc

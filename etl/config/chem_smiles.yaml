@@ -1,0 +1,23 @@
+# Curated name → SMILES seed map (highest-confidence resolution, checked before OPSIN).
+# Add common abbreviations and trade names OPSIN cannot parse from systematic rules.
+# Keys are matched case-insensitively. Extend freely as the ether corpus grows.
+smiles:
+  # ─ glyme / ether solvents (the prob2 target family) ─
+  DME: "COCCOC"                       # 1,2-dimethoxyethane (monoglyme)
+  monoglyme: "COCCOC"
+  diglyme: "COCCOCCOC"
+  triglyme: "COCCOCCOCCOC"
+  tetraglyme: "COCCOCCOCCOCCOC"
+  THF: "C1CCOC1"
+  "2-MeTHF": "CC1CCCO1"
+  dioxolane: "C1COCO1"
+  DOL: "C1COCO1"
+  # ─ carbonate co-solvents (for cross-referencing) ─
+  EC: "C1COC(=O)O1"
+  PC: "CC1COC(=O)O1"
+  DMC: "COC(=O)OC"
+  EMC: "CCOC(=O)OC"
+  DEC: "CCOC(=O)OCC"
+  FEC: "FC1COC(=O)O1"
+  # ─ fluorinated ethers (oxidative-stability extension candidates) ─
+  TFEE: "FC(F)(F)COCC(F)(F)F"         # bis(2,2,2-trifluoroethyl) ether
