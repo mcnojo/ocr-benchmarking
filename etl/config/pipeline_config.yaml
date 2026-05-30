@@ -43,7 +43,7 @@ tree_llm:
 # ─── Vision server (OCR model, any OpenAI-compatible endpoint) ────────────────
 # Works with vLLM, Ollama, MLX, or any server exposing /v1/chat/completions
 vision_server:
-  base_url: "http://35.94.138.87:8004/v1"   # chandra on EC2 (vllm/aws/instances/chandra.ip)
+  base_url: "http://35.86.211.165:8004/v1"   # chandra on EC2 (vllm/aws/instances/chandra.ip)
   api_key: "EMPTY"                           # vLLM default
   ocr_model: "datalab-to/chandra-ocr-2"
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import sys
 import time
 from pathlib import Path
 from openai import AsyncOpenAI
@@ -11,16 +12,8 @@ from .chem_extractor import extract_chem_entities, load_seed_entities
 from .chandra_parser import parse as parse_chandra
 from . import tree_builder  # for the run-scoped logger (_current_logger)
 
-
-# ─── Prompt templates ─────────────────────────────────────────────────────────
-
-OCR_PROMPT = (
-    "Extract all text from this image with high fidelity. "
-    "Pay special attention to: chemical formulas (e.g. Na3Zr2Si2PO12, NaFSI, NaPF6), "
-    "mathematical expressions and subscripts/superscripts, "
-    "units (S/cm, mAh/g, V vs Na+/Na), axis labels and tick values, table cell contents. "
-    "Return the extracted text verbatim, preserving structure where possible."
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from shared.prompts.chandra import CHANDRA_OCR_LAYOUT_PROMPT  # noqa: E402
 
 
 def _image_to_b64(image_path: str) -> str:
@@ -74,7 +67,7 @@ class Enricher:
                             "role": "user",
                             "content": [
                                 {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                                {"type": "text", "text": OCR_PROMPT},
+                                {"type": "text", "text": CHANDRA_OCR_LAYOUT_PROMPT},
                             ],
                         },
                     ],

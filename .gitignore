@@ -236,4 +236,4 @@ etl/kb/*
 etl/logs/*
 docs/
 .DS_Store
-test_hard/*
+test_hard/

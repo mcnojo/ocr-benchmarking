@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ocr-benchmarking"
+version = "0.1.0"
+description = "OCR benchmarking + scientific-paper ETL pipeline."
+requires-python = ">=3.9"
+dependencies = [
+    # ─ PDF / images
+    "pymupdf>=1.24.0",
+    "pdf2image>=1.17.0",
+    "Pillow>=10.0.0",
+    "numpy>=1.24.0",
+    "opencv-python-headless>=4.8.0",
+
+    # ─ Layout detection + OCR baseline
+    "doclayout-yolo>=0.0.4",
+    "huggingface-hub>=0.20.0",
+    "torch>=2.1.0",
+    "torchvision>=0.16.0",
+    "pytesseract>=0.3.10",
+
+    # ─ Table extraction (preprocessing)
+    "camelot-py[cv]>=0.11.0",
+    "tabula-py>=2.9.0",
+
+    # ─ LLM clients (vLLM/OpenAI-compatible + cloud providers)
+    "openai>=2.36.0",
+    "anthropic>=0.40.0",
+    "tiktoken>=0.7.0",
+
+    # ─ Config / schema
+    "pydantic>=2.5.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+
+    # ─ Async / utilities
+    "anyio>=4.0.0",
+    "tqdm>=4.66.0",
+    "rich>=13.0.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+serve = ["vllm>=0.11.0"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["shared*", "etl*", "vllm*", "preprocessing*"]
+exclude = ["env*", "frontend*", "docs*", "data*", "test_hard*"]

@@ -35,13 +35,26 @@ function renderAnalyze(jsonStr) {
   }).join("");
 }
 
+// Chandra emits <img alt="..."> (no src) as inline image-region *descriptions*,
+// per its prompt. Browsers would render those as broken-image SVGs, so promote
+// them to a styled aside containing the alt text.
+function sanitizeChandraHtml(html) {
+  return html.replace(/<img\b([^>]*?)\/?>/gi, (full, attrs) => {
+    if (/\bsrc\s*=/i.test(attrs)) return full;
+    const m = attrs.match(/\balt\s*=\s*(?:"([^"]*)"|'([^']*)')/i);
+    const alt = m ? (m[1] ?? m[2] ?? "") : "";
+    return alt ? `<aside class="img-desc">${esc(alt)}</aside>` : "";
+  });
+}
+
 // Pre-parsed chandra envelope from etl/pipeline/chandra_parser.py.
 function renderParsed(p) {
   if (!p) return "";
   if (p.format === "layout_html") {
     return (p.blocks || []).map((b) => {
       const label = esc(b.label || "Block");
-      return `<div data-label="${label}">${b.html || esc(b.text || "")}</div>`;
+      const body = b.html ? sanitizeChandraHtml(b.html) : esc(b.text || "");
+      return `<div data-label="${label}">${body}</div>`;
     }).join("");
   }
   if (p.format === "figure_analysis") {
@@ -62,7 +75,7 @@ function renderChandra(content) {
   if (!content) return "";
   const m = content.match(/<analyze>\s*([\s\S]*?)\s*<\/analyze>/);
   if (m) return renderAnalyze(m[1]) + rawBlock(content);
-  if (/data-bbox=|data-label=/.test(content)) return content; // trusted local-pipeline HTML
+  if (/data-bbox=|data-label=/.test(content)) return sanitizeChandraHtml(content); // trusted local-pipeline HTML
   // truncated <analyze> with no closing tag, or unknown shape — try to salvage the JSON head
   const opener = content.indexOf("<analyze>");
   if (opener !== -1) {
