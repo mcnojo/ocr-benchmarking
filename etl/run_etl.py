@@ -12,6 +12,7 @@ import asyncio
 import json
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 import click
 import yaml
@@ -19,12 +20,43 @@ from rich.console import Console
 
 console = Console()
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_VLLM_INSTANCE_DIR = _REPO_ROOT / "vllm" / "aws" / "instances"
+
+
+def _resolve_vllm_instance(url: str) -> str:
+    """Resolve `vllm-instance://<name>:<port>/<path>` → `http://<ip>:<port>/<path>`
+    by reading vllm/aws/instances/<name>.ip (written by vllm/aws/launch.sh).
+    Passthrough for any other scheme.
+    """
+    if not url.startswith("vllm-instance://"):
+        return url
+    parsed = urlparse(url)
+    name = parsed.hostname
+    if not name:
+        raise ValueError(f"Bad vllm-instance URL (no host): {url!r}")
+    ip_file = _VLLM_INSTANCE_DIR / f"{name}.ip"
+    if not ip_file.exists():
+        raise FileNotFoundError(
+            f"No IP file at {ip_file}. Run `vllm/aws/launch.sh {name}` first, "
+            f"or pin vision_server.base_url to a literal http://... URL."
+        )
+    ip = ip_file.read_text().strip()
+    if not ip:
+        raise ValueError(f"{ip_file} is empty")
+    port = f":{parsed.port}" if parsed.port else ""
+    return f"http://{ip}{port}{parsed.path or ''}"
+
 
 def load_config(config_path: str = "config/pipeline_config.yaml") -> dict:
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
     # Stash the config directory so modules can find sibling files
     cfg["_config_dir"] = str(Path(config_path).resolve().parent)
+    # Resolve any vllm-instance:// URLs against vllm/aws/instances/<name>.ip
+    vs = cfg.get("vision_server", {})
+    if isinstance(vs.get("base_url"), str):
+        vs["base_url"] = _resolve_vllm_instance(vs["base_url"])
     return cfg
 
 
