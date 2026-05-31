@@ -49,7 +49,7 @@ main { flex: 1; display: flex; min-height: 0; }
 .visual[data-t="isolate_formula"] .type { background: #0d1b36; color: #88bbff; }
 
 .visual-body { padding-top: 0.5rem; display: flex; flex-direction: column; gap: 0.6rem; }
-.visual-body img { max-width: 100%; border-radius: 3px; background: #fff; }
+.visual-body > img { max-width: 100%; border-radius: 3px; background: #fff; }
 .visual-body .caption { color: #aab; font-style: italic; font-size: 0.8rem; }
 .visual-body .block h4 {
   font-size: 0.7rem; color: #88a; text-transform: uppercase; letter-spacing: 0.05em;
@@ -72,9 +72,18 @@ main { flex: 1; display: flex; min-height: 0; }
 .ocr div[data-label="Table"]::before { background: #1f1a3e; color: #7b68ee; }
 .ocr p, .ocr h1, .ocr h2, .ocr h3, .ocr h4 { margin: 0.2rem 0; }
 .ocr h2, .ocr h3 { color: #fff; font-size: 0.9rem; }
-.ocr table { border-collapse: collapse; width: 100%; }
-.ocr th, .ocr td { border: 1px solid #2a3a5e; padding: 0.2rem 0.4rem; font-size: 0.75rem; }
-.ocr th { background: #0f3460; }
+.ocr ul, .ocr ol { padding-left: 1.2rem; margin: 0.2rem 0; }
+.ocr li { margin: 0.1rem 0; }
+.ocr table { border-collapse: collapse; width: 100%; background: transparent; }
+.ocr th, .ocr td { border: 1px solid #2a3a5e; padding: 0.2rem 0.4rem; font-size: 0.75rem; color: #c8c8d8; }
+.ocr th { background: #0f3460; color: #fff; }
+.ocr chem { font-family: ui-monospace, monospace; color: #f5a623;
+            background: #2a1f0a; padding: 0 0.25rem; border-radius: 2px; font-size: 0.78rem; }
+.ocr aside.img-desc {
+  background: #0d1b36; border-left: 3px solid #88bbff;
+  padding: 0.4rem 0.6rem; margin: 0.3rem 0;
+  font-size: 0.78rem; line-height: 1.45; color: #b8b8c8; font-style: italic;
+}
 
 /* chandra OCR analyze blocks */
 .ocr .analysis { background: #1a1a2e; padding: 0.5rem 0.6rem; border-radius: 3px; margin-bottom: 0.4rem; }

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import argparse
 import base64
 import sys
@@ -10,64 +12,13 @@ VLLM_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = VLLM_DIR / "results"
 INSTANCES_DIR = VLLM_DIR / "aws" / "instances"
 
-CHANDRA_ALLOWED_TAGS = [
-    "math", "br", "i", "b", "u", "del", "sup", "sub", "table", "tr", "td",
-    "p", "th", "div", "pre", "h1", "h2", "h3", "h4", "h5", "ul", "ol", "li",
-    "input", "a", "span", "img", "hr", "tbody", "small", "caption", "strong",
-    "thead", "big", "code", "chem",
-]
-CHANDRA_ALLOWED_ATTRS = [
-    "class", "colspan", "rowspan", "display", "checked", "type", "border",
-    "value", "style", "href", "alt", "align", "data-bbox", "data-label",
-]
-CHANDRA_PROMPT_ENDING = f"""
-Only use these tags {CHANDRA_ALLOWED_TAGS}, and these attributes {CHANDRA_ALLOWED_ATTRS}.
-
-Guidelines:
-* Inline math: Surround math with <math>...</math> tags. Math expressions should be rendered in KaTeX-compatible LaTeX. Use display for block math.
-* Tables: Use colspan and rowspan attributes to match table structure.
-* Formatting: Maintain consistent formatting with the image, including spacing, indentation, subscripts/superscripts, and special characters.
-* Images: Include a description of any images in the alt attribute of an <img> tag. Do not fill out the src property. Describe in detail inside the div tag. Also convert charts to high fidelity data, and convert diagrams to mermaid.
-* Forms: Mark checkboxes and radio buttons properly.
-* Text: join lines together properly into paragraphs using <p>...</p> tags.  Use <br> tags for line breaks within paragraphs, but only when absolutely necessary to maintain meaning.
-* Chemistry: Use <chem>...</chem> tags for chemical formulas with reactive SMILES.
-* Lists: Preserve indents and proper list markers.
-* Use the simplest possible HTML structure that accurately represents the content of the block.
-* Make sure the text is accurate and easy for a human to read and interpret.  Reading order should be correct and natural.
-""".strip()
-
-CHANDRA_OCR_LAYOUT_PROMPT = f"""
-OCR this image to HTML, arranged as layout blocks.  Each layout block should be a div with the data-bbox attribute representing the bounding box of the block in x0 y0 x1 y1 format.  Bboxes are normalized 0-1000. The data-label attribute is the label for the block.
-
-Use the following labels:
-- Caption
-- Footnote
-- Equation-Block
-- List-Group
-- Page-Header
-- Page-Footer
-- Image
-- Section-Header
-- Table
-- Text
-- Complex-Block
-- Code-Block
-- Form
-- Table-Of-Contents
-- Figure
-- Chemical-Block
-- Diagram
-- Bibliography
-- Blank-Page
-
-{CHANDRA_PROMPT_ENDING}
-""".strip()
-
-CHANDRA_OCR_PROMPT = f"""
-OCR this image to HTML.
-
-{CHANDRA_PROMPT_ENDING}
-""".strip()
+# Canonical chandra prompts — single source of truth shared with the ETL pipeline.
+# Put repo root on sys.path so `shared.prompts.chandra` resolves regardless of CWD.
+sys.path.insert(0, str(VLLM_DIR.parent))
+from shared.prompts.chandra import (  # noqa: E402
+    CHANDRA_OCR_LAYOUT_PROMPT,
+    CHANDRA_OCR_PROMPT,
+)
 
 
 PROMPTS = {
@@ -177,7 +128,7 @@ def ocr_image(image_path: str, model_key: str, host: str = "localhost",
                 {"type": "text", "text": resolved_prompt},
             ],
         }],
-        max_tokens=2048,
+        max_tokens=4096,
     )
 
     return {
