@@ -131,7 +131,7 @@ def _init_clients(config: dict):
         except ImportError as e:
             raise ImportError(
                 "anthropic provider requires the `anthropic` package. "
-                "Add it to requirements.txt and pip install."
+                "Add it to pyproject.toml and pip install."
             ) from e
         if not api_key:
             raise ValueError(

@@ -80,6 +80,7 @@ rendering:
 enrichment:
   run_ocr: true
   run_chem_entity_extraction: true
+  run_property_extraction: true       # emit typed molecule↔property↔conditions records (feeds HOMO calibration)
   max_concurrent_enrichments: 4
   figure_aware_resummarize: true      # post-enrichment Stage E: re-summarize nodes with figure data (no new OCR calls)
 

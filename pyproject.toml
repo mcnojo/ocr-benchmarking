@@ -41,6 +41,12 @@ dependencies = [
     "tqdm>=4.66.0",
     "rich>=13.0.0",
     "click>=8.1.0",
+
+    # Structure resolution for typed property extraction (optional but recommended).
+    # Without these, property records are still emitted with smiles=None / resolved_by="unresolved";
+    # with them, names are resolved to canonical SMILES + InChIKey for the calibration set.
+    "rdkit>=2023.9.1",             # SMILES canonicalization + InChIKey
+    "py2opsin>=1.0.1",             # IUPAC/systematic name → SMILES (requires a Java runtime)
 ]
 
 [project.optional-dependencies]
